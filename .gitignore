@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+outputs/
+data/
+dist/
+*.egg-info/
+.DS_Store
+deep-research-pipeline-cc/
+CLAUDE.md
+PLAN.md

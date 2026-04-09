@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deep Research</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1b26;
+            --surface2: #24253a;
+            --border: #2f3146;
+            --text: #c0caf5;
+            --text-dim: #565f89;
+            --accent: #7aa2f7;
+            --accent2: #bb9af7;
+            --green: #9ece6a;
+            --yellow: #e0af68;
+            --red: #f7768e;
+            --radius: 8px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        header {
+            text-align: center;
+            padding: 40px 0 20px;
+        }
+        header h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+        header p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            color: var(--text-dim);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active {
+            color: var(--accent);
+            border-bottom-color: var(--accent);
+        }
+
+        /* Research form */
+        .search-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .search-box textarea {
+            width: 100%;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 12px;
+            font-size: 1rem;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 60px;
+        }
+        .search-box textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+            align-items: center;
+        }
+        select {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 8px 12px;
+            font-size: 0.9rem;
+        }
+        label.checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            cursor: pointer;
+        }
+        label.checkbox input { accent-color: var(--accent); }
+        .btn {
+            background: var(--accent);
+            color: var(--bg);
+            border: none;
+            border-radius: var(--radius);
+            padding: 10px 24px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            margin-left: auto;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Progress */
+        .progress-area {
+            display: none;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .progress-area.active { display: block; }
+        .progress-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--accent);
+        }
+        .progress-steps {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .progress-steps .step {
+            padding: 3px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .step .icon { width: 16px; text-align: center; }
+        .step.active .icon { color: var(--yellow); }
+        .step.done .icon { color: var(--green); }
+
+        /* Sub-questions panel */
+        .sub-questions {
+            background: var(--surface2);
+            border-radius: var(--radius);
+            padding: 12px 16px;
+            margin: 10px 0;
+            font-size: 0.9rem;
+        }
+        .sub-questions h4 { color: var(--accent2); margin-bottom: 6px; }
+        .sub-questions li { margin-left: 20px; padding: 2px 0; }
+
+        /* Report */
+        .report-area {
+            display: none;
+            margin-bottom: 20px;
+        }
+        .report-area.active { display: block; }
+        .report-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .report-header h2 { font-size: 1.2rem; color: var(--green); }
+        .report-actions { display: flex; gap: 8px; }
+        .btn-sm {
+            background: var(--surface2);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 6px 14px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+
+        .report-content {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+        }
+        .report-content h1 { font-size: 1.4rem; margin-bottom: 8px; color: var(--accent); }
+        .report-content h2 { font-size: 1.15rem; margin: 20px 0 8px; color: var(--accent2); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+        .report-content h3 { font-size: 1rem; margin: 16px 0 6px; color: var(--text); }
+        .report-content p { margin-bottom: 10px; }
+        .report-content ul, .report-content ol { margin: 8px 0 8px 24px; }
+        .report-content li { margin-bottom: 4px; }
+        .report-content a { color: var(--accent); text-decoration: none; }
+        .report-content a:hover { text-decoration: underline; }
+        .report-content strong { color: var(--text); }
+        .report-content code { background: var(--surface2); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }
+        .report-content blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-dim); margin: 8px 0; }
+        .report-content hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+
+        /* Follow-ups */
+        .follow-ups {
+            margin-top: 16px;
+        }
+        .follow-up-btn {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            padding: 10px 14px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+        .follow-up-btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        /* History */
+        .history-area { display: none; }
+        .history-area.active { display: block; }
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .history-table th {
+            text-align: left;
+            padding: 10px 12px;
+            color: var(--text-dim);
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .history-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        .history-table tr { cursor: pointer; transition: background 0.15s; }
+        .history-table tbody tr:hover { background: var(--surface2); }
+        .query-cell { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .depth-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        .depth-quick { background: #1a3a2a; color: var(--green); }
+        .depth-standard { background: #1a2a3a; color: var(--accent); }
+        .depth-deep { background: #2a1a3a; color: var(--accent2); }
+        .delete-btn {
+            background: none;
+            border: none;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 4px;
+        }
+        .delete-btn:hover { color: var(--red); }
+
+        /* Compare */
+        .compare-area { display: none; }
+        .compare-area.active { display: block; }
+        .compare-controls {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .compare-controls p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+        }
+        .compare-select-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 250px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+        }
+        .compare-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+        .compare-item:hover { border-color: var(--accent); }
+        .compare-item.selected { border-color: var(--accent); background: #1a2a3a; }
+        .compare-item input { accent-color: var(--accent); }
+        .compare-item .ci-query { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .compare-item .ci-meta { color: var(--text-dim); font-size: 0.8rem; white-space: nowrap; }
+        .compare-grid {
+            display: grid;
+            gap: 16px;
+            margin-top: 16px;
+        }
+        .compare-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+        .compare-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .compare-grid.cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+        .compare-panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .compare-panel-header {
+            background: var(--surface2);
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        .compare-panel-header h3 {
+            font-size: 0.9rem;
+            color: var(--accent);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .compare-panel-header .meta {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 2px;
+        }
+        .compare-panel-body {
+            padding: 14px;
+            max-height: 600px;
+            overflow-y: auto;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+        .compare-panel-body h1 { font-size: 1.1rem; color: var(--accent); margin-bottom: 6px; }
+        .compare-panel-body h2 { font-size: 0.95rem; color: var(--accent2); margin: 12px 0 6px; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
+        .compare-panel-body h3 { font-size: 0.9rem; color: var(--text); margin: 10px 0 4px; }
+        .compare-panel-body p { margin-bottom: 8px; }
+        .compare-panel-body ul, .compare-panel-body ol { margin: 6px 0 6px 18px; }
+        .compare-panel-body li { margin-bottom: 3px; }
+        .compare-panel-body a { color: var(--accent); text-decoration: none; }
+        .compare-panel-body hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+
+        /* Empty state */
+        .empty { text-align: center; color: var(--text-dim); padding: 40px; }
+
+        /* Spinner */
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--border);
+            border-top-color: var(--yellow);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Deep Research</h1>
+            <p id="config-info">Loading...</p>
+        </header>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="research">Research</div>
+            <div class="tab" data-tab="history">History</div>
+            <div class="tab" data-tab="compare">Compare</div>
+        </div>
+
+        <!-- Research Tab -->
+        <div id="tab-research">
+            <div class="search-box">
+                <textarea id="query" placeholder="What would you like to research?" rows="2"></textarea>
+                <div class="controls">
+                    <select id="depth">
+                        <option value="quick">Quick</option>
+                        <option value="standard" selected>Standard</option>
+                        <option value="deep">Deep</option>
+                    </select>
+                    <label class="checkbox">
+                        <input type="checkbox" id="thinking"> Thinking
+                    </label>
+                    <label class="checkbox">
+                        <input type="checkbox" id="academic"> Academic
+                    </label>
+                    <label class="checkbox">
+                        <input type="checkbox" id="agent-mode"> Agent
+                    </label>
+                    <select id="template">
+                        <option value="">No template</option>
+                        <option value="technology">Technology</option>
+                        <option value="science">Science</option>
+                        <option value="market">Market</option>
+                        <option value="literature">Literature</option>
+                    </select>
+                    <button class="btn" id="start-btn" onclick="startResearch()">Research</button>
+                </div>
+            </div>
+
+            <div class="progress-area" id="progress">
+                <div class="progress-title"><span class="spinner"></span> Researching...</div>
+                <div class="progress-steps" id="progress-steps"></div>
+            </div>
+
+            <div class="report-area" id="report">
+                <div class="report-header">
+                    <h2>Research Complete</h2>
+                    <div class="report-actions">
+                        <button class="btn-sm" onclick="copyMarkdown()">Copy Markdown</button>
+                        <button class="btn-sm" onclick="downloadMarkdown()">Download .md</button>
+                        <button class="btn-sm" onclick="downloadPdf()">Download PDF</button>
+                    </div>
+                </div>
+                <div class="report-content" id="report-content"></div>
+                <div class="follow-ups" id="follow-ups"></div>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="tab-history" class="history-area">
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Query</th>
+                        <th>Depth</th>
+                        <th>Sources</th>
+                        <th>Date</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="history-body"></tbody>
+            </table>
+            <div class="empty" id="history-empty" style="display:none">No research sessions yet.</div>
+        </div>
+
+        <!-- Compare Tab -->
+        <div id="tab-compare" class="compare-area">
+            <div class="compare-controls">
+                <p>Select 2-4 research sessions to compare side by side:</p>
+                <div class="compare-select-list" id="compare-list"></div>
+                <button class="btn" id="compare-btn" onclick="runCompare()" disabled>Compare Selected</button>
+            </div>
+            <div id="compare-results"></div>
+        </div>
+    </div>
+
+    <script>
+    let currentWs = null;
+    let currentMarkdown = '';
+    let currentSessionId = null;
+
+    // --- Tabs ---
+    const allTabs = ['research', 'history', 'compare'];
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const target = tab.dataset.tab;
+            allTabs.forEach(t => {
+                const el = document.getElementById('tab-' + t);
+                if (t === target) {
+                    el.style.display = 'block';
+                    el.classList.add('active');
+                } else {
+                    el.style.display = 'none';
+                    el.classList.remove('active');
+                }
+            });
+            if (target === 'history') loadHistory();
+            if (target === 'compare') loadCompareList();
+        });
+    });
+
+    // --- Config ---
+    async function loadConfig() {
+        try {
+            const res = await fetch('/api/config');
+            const data = await res.json();
+            document.getElementById('config-info').textContent =
+                `Model: ${data.model} | Search: Tavily`;
+        } catch(e) {
+            document.getElementById('config-info').textContent = 'Could not load config';
+        }
+    }
+    loadConfig();
+
+    // --- Research ---
+    function startResearch() {
+        const query = document.getElementById('query').value.trim();
+        if (!query) return;
+
+        const depth = document.getElementById('depth').value;
+        const thinking = document.getElementById('thinking').checked;
+        const academic = document.getElementById('academic').checked;
+        const agent = document.getElementById('agent-mode').checked;
+        const template = document.getElementById('template').value;
+
+        // Reset UI
+        document.getElementById('progress').classList.add('active');
+        document.getElementById('report').classList.remove('active');
+        document.getElementById('progress-steps').innerHTML = '';
+        document.getElementById('start-btn').disabled = true;
+
+        // Connect WebSocket
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        currentWs = new WebSocket(`${protocol}//${location.host}/ws/research`);
+
+        currentWs.onopen = () => {
+            currentWs.send(JSON.stringify({ query, depth, thinking, academic, agent, template }));
+        };
+
+        currentWs.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            handleMessage(msg);
+        };
+
+        currentWs.onerror = () => {
+            addStep('Connection error', 'error');
+            document.getElementById('start-btn').disabled = false;
+        };
+
+        currentWs.onclose = () => {
+            document.getElementById('start-btn').disabled = false;
+        };
+    }
+
+    function handleMessage(msg) {
+        const { event, data } = msg;
+
+        switch (event) {
+            case 'started':
+                addStep(`Researching: ${data.query} (${data.depth})`, 'active');
+                break;
+
+            case 'progress':
+                addStep(`${data.step}: ${data.detail}`, 'active');
+                break;
+
+            case 'sub_questions':
+                const sqHtml = data.map((sq, i) => `<li>${sq.question}</li>`).join('');
+                const sqDiv = document.createElement('div');
+                sqDiv.className = 'sub-questions';
+                sqDiv.innerHTML = `<h4>Sub-Questions</h4><ol>${sqHtml}</ol>`;
+                document.getElementById('progress-steps').appendChild(sqDiv);
+                break;
+
+            case 'gaps':
+                const gapHtml = data.map(g => `<li>${g.description}</li>`).join('');
+                const gapDiv = document.createElement('div');
+                gapDiv.className = 'sub-questions';
+                gapDiv.innerHTML = `<h4>Knowledge Gaps Found</h4><ul>${gapHtml}</ul>`;
+                document.getElementById('progress-steps').appendChild(gapDiv);
+                break;
+
+            case 'agent_decision':
+                const adDiv = document.createElement('div');
+                adDiv.className = 'sub-questions';
+                const actionLabel = {search_more: 'Searching more', go_deeper: 'Going deeper', broaden: 'Broadening', sufficient: 'Research sufficient'}[data.action] || data.action;
+                let adHtml = `<h4>Agent: ${actionLabel}</h4><p style="color:var(--text-dim)">${data.reasoning}</p>`;
+                if (data.queries && data.queries.length > 0) {
+                    adHtml += '<ul>' + data.queries.map(q => `<li>${escapeHtml(q)}</li>`).join('') + '</ul>';
+                }
+                adDiv.innerHTML = adHtml;
+                document.getElementById('progress-steps').appendChild(adDiv);
+                break;
+
+            case 'complete':
+                document.getElementById('progress').classList.remove('active');
+                document.getElementById('report').classList.add('active');
+                document.getElementById('report-content').innerHTML = data.html;
+                currentMarkdown = data.markdown;
+                currentSessionId = data.session_id;
+
+                // Follow-ups
+                const fuDiv = document.getElementById('follow-ups');
+                fuDiv.innerHTML = '';
+                if (data.follow_up_questions && data.follow_up_questions.length > 0) {
+                    const title = document.createElement('h3');
+                    title.textContent = 'Follow-up Questions';
+                    title.style.cssText = 'color: var(--accent2); margin-bottom: 8px;';
+                    fuDiv.appendChild(title);
+                    data.follow_up_questions.forEach(q => {
+                        const btn = document.createElement('button');
+                        btn.className = 'follow-up-btn';
+                        btn.textContent = q;
+                        btn.onclick = () => {
+                            document.getElementById('query').value = q;
+                            startResearch();
+                        };
+                        fuDiv.appendChild(btn);
+                    });
+                }
+                break;
+
+            case 'error':
+                addStep(`Error: ${data}`, 'error');
+                document.getElementById('start-btn').disabled = false;
+                break;
+        }
+    }
+
+    function addStep(text, status = 'done') {
+        const stepsEl = document.getElementById('progress-steps');
+        const div = document.createElement('div');
+        div.className = `step ${status}`;
+        const icon = status === 'active' ? '<span class="spinner"></span>' :
+                     status === 'error' ? '<span class="icon" style="color:var(--red)">x</span>' :
+                     '<span class="icon">+</span>';
+        div.innerHTML = `${icon} <span>${text}</span>`;
+        stepsEl.appendChild(div);
+        stepsEl.scrollTop = stepsEl.scrollHeight;
+    }
+
+    // --- Markdown actions ---
+    function copyMarkdown() {
+        navigator.clipboard.writeText(currentMarkdown).then(() => {
+            const btn = event.target;
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy Markdown', 1500);
+        });
+    }
+
+    function downloadMarkdown() {
+        const blob = new Blob([currentMarkdown], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `research_${currentSessionId || 'report'}.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function downloadPdf() {
+        if (!currentSessionId) return;
+        window.open(`/api/session/${currentSessionId}/pdf`, '_blank');
+    }
+
+    // --- History ---
+    async function loadHistory() {
+        try {
+            const res = await fetch('/api/history');
+            const data = await res.json();
+            const body = document.getElementById('history-body');
+            const empty = document.getElementById('history-empty');
+
+            if (data.sessions.length === 0) {
+                body.innerHTML = '';
+                empty.style.display = 'block';
+                return;
+            }
+
+            empty.style.display = 'none';
+            body.innerHTML = data.sessions.map(s => `
+                <tr onclick="viewSession(${s.id})">
+                    <td>${s.id}</td>
+                    <td class="query-cell">${escapeHtml(s.query)}</td>
+                    <td><span class="depth-badge depth-${s.depth}">${s.depth}</span></td>
+                    <td>${s.source_count}</td>
+                    <td>${s.created_at.substring(0, 16).replace('T', ' ')}</td>
+                    <td><button class="delete-btn" onclick="deleteSession(event, ${s.id})" title="Delete">x</button></td>
+                </tr>
+            `).join('');
+        } catch(e) {
+            console.error('Failed to load history:', e);
+        }
+    }
+
+    async function viewSession(id) {
+        try {
+            const res = await fetch(`/api/session/${id}`);
+            const data = await res.json();
+
+            // Switch to research tab and show report
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('[data-tab="research"]').classList.add('active');
+            document.getElementById('tab-research').style.display = 'block';
+            document.getElementById('tab-history').style.display = 'none';
+            document.getElementById('tab-history').classList.remove('active');
+
+            document.getElementById('progress').classList.remove('active');
+            document.getElementById('report').classList.add('active');
+            document.getElementById('report-content').innerHTML = data.html;
+            currentMarkdown = data.markdown;
+            currentSessionId = id;
+            document.getElementById('query').value = data.query;
+
+            // Follow-ups
+            const fuDiv = document.getElementById('follow-ups');
+            fuDiv.innerHTML = '';
+            if (data.follow_up_questions && data.follow_up_questions.length > 0) {
+                const title = document.createElement('h3');
+                title.textContent = 'Follow-up Questions';
+                title.style.cssText = 'color: var(--accent2); margin-bottom: 8px;';
+                fuDiv.appendChild(title);
+                data.follow_up_questions.forEach(q => {
+                    const btn = document.createElement('button');
+                    btn.className = 'follow-up-btn';
+                    btn.textContent = q;
+                    btn.onclick = () => {
+                        document.getElementById('query').value = q;
+                        startResearch();
+                    };
+                    fuDiv.appendChild(btn);
+                });
+            }
+        } catch(e) {
+            console.error('Failed to load session:', e);
+        }
+    }
+
+    async function deleteSession(event, id) {
+        event.stopPropagation();
+        if (!confirm('Delete this research session?')) return;
+        try {
+            await fetch(`/api/session/${id}`, { method: 'DELETE' });
+            loadHistory();
+        } catch(e) {
+            console.error('Failed to delete:', e);
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // --- Compare ---
+    let compareSelected = new Set();
+
+    async function loadCompareList() {
+        try {
+            const res = await fetch('/api/history');
+            const data = await res.json();
+            const list = document.getElementById('compare-list');
+            compareSelected.clear();
+            updateCompareBtn();
+
+            if (data.sessions.length === 0) {
+                list.innerHTML = '<div class="empty">No sessions to compare.</div>';
+                return;
+            }
+
+            list.innerHTML = data.sessions.map(s => `
+                <div class="compare-item" data-id="${s.id}" onclick="toggleCompare(this, ${s.id})">
+                    <input type="checkbox" ${compareSelected.has(s.id) ? 'checked' : ''}>
+                    <span class="ci-query">${escapeHtml(s.query)}</span>
+                    <span class="ci-meta">
+                        <span class="depth-badge depth-${s.depth}">${s.depth}</span>
+                        ${s.source_count} sources
+                    </span>
+                </div>
+            `).join('');
+        } catch(e) {
+            console.error('Failed to load compare list:', e);
+        }
+    }
+
+    function toggleCompare(el, id) {
+        if (compareSelected.has(id)) {
+            compareSelected.delete(id);
+            el.classList.remove('selected');
+            el.querySelector('input').checked = false;
+        } else {
+            if (compareSelected.size >= 4) return;
+            compareSelected.add(id);
+            el.classList.add('selected');
+            el.querySelector('input').checked = true;
+        }
+        updateCompareBtn();
+    }
+
+    function updateCompareBtn() {
+        const btn = document.getElementById('compare-btn');
+        btn.disabled = compareSelected.size < 2;
+        btn.textContent = compareSelected.size < 2
+            ? `Select ${2 - compareSelected.size} more`
+            : `Compare ${compareSelected.size} Sessions`;
+    }
+
+    async function runCompare() {
+        const ids = Array.from(compareSelected).join(',');
+        const btn = document.getElementById('compare-btn');
+        btn.disabled = true;
+        btn.textContent = 'Loading...';
+
+        try {
+            const res = await fetch(`/api/compare?ids=${ids}`);
+            const data = await res.json();
+
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+
+            const count = data.sessions.length;
+            const colClass = count <= 2 ? 'cols-2' : count === 3 ? 'cols-3' : 'cols-4';
+
+            const panels = data.sessions.map(s => `
+                <div class="compare-panel">
+                    <div class="compare-panel-header">
+                        <h3>${escapeHtml(s.query)}</h3>
+                        <div class="meta">${s.source_count} sources &middot; ${s.iterations_count} iterations &middot; ${s.created_at.substring(0, 10)}</div>
+                    </div>
+                    <div class="compare-panel-body">${s.html}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('compare-results').innerHTML =
+                `<div class="compare-grid ${colClass}">${panels}</div>`;
+        } catch(e) {
+            console.error('Compare failed:', e);
+            alert('Failed to compare sessions');
+        } finally {
+            updateCompareBtn();
+        }
+    }
+
+    // Keyboard shortcut: Enter to research (Shift+Enter for newline)
+    document.getElementById('query').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            startResearch();
+        }
+    });
+    </script>
+</body>
+</html>
