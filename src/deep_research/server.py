@@ -11,7 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from .config import settings
-from .models import ResearchConfig, ResearchDepth, ResearchReport, SourceType
+from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport, SourceType
 from .output.report import format_report_markdown, save_report
 from .pipeline.templates import list_templates, get_template
 from .storage.db import (
@@ -181,6 +181,8 @@ async def run_research_with_ws(
     executive, detailed, follow_ups = await asynthesize_report(
         query, report.sub_questions, report.sources,
         thinking=config.use_thinking, model=config.models.get("synthesize"),
+        report_style=config.report_style,
+        iteration_count=len(report.iterations),
     )
     report.executive_summary = executive
     report.detailed_findings = detailed
@@ -385,6 +387,8 @@ async def run_agent_with_ws(
         thinking=config.use_thinking, model=config.models.get("synthesize"),
         template_guidance=tmpl.synthesis_guidance if tmpl else "",
         system_prompt=tmpl.system_prompt if tmpl else "",
+        report_style=config.report_style,
+        iteration_count=len(report.iterations),
     )
     report.executive_summary = executive
     report.detailed_findings = detailed
@@ -409,6 +413,7 @@ async def get_config():
         "model": settings.glm_model,
         "default_depth": settings.default_depth,
         "depths": ["quick", "standard", "deep"],
+        "styles": ["brief", "standard", "academic"],
         "templates": list_templates(),
     }
 
@@ -534,6 +539,7 @@ async def ws_research(ws: WebSocket):
         data = await ws.receive_json()
         query = data.get("query", "").strip()
         depth = data.get("depth", "standard")
+        style = data.get("style", "standard")
         thinking = data.get("thinking", False)
         academic = data.get("academic", False)
         template = data.get("template", "")
@@ -545,6 +551,7 @@ async def ws_research(ws: WebSocket):
             return
 
         config = ResearchConfig.from_depth(ResearchDepth(depth))
+        config.report_style = ReportStyle(style)
         if thinking:
             config.use_thinking = True
         if academic:

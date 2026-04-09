@@ -214,6 +214,8 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
             thinking=config.use_thinking, model=config.models.get("synthesize"),
             template_guidance=tmpl.synthesis_guidance if tmpl else "",
             system_prompt=tmpl.system_prompt if tmpl else "",
+            report_style=config.report_style,
+            iteration_count=len(report.iterations),
         )
         report.executive_summary = executive
         report.detailed_findings = detailed
@@ -289,6 +291,8 @@ async def acontinue_research(
         executive, detailed, follow_ups = await asynthesize_report(
             report.query, report.sub_questions, report.sources,
             thinking=config.use_thinking, model=config.models.get("synthesize"),
+            report_style=config.report_style,
+            iteration_count=len(report.iterations),
         )
         report.executive_summary = executive
         report.detailed_findings = detailed

@@ -11,7 +11,7 @@ from rich.table import Table
 
 from .config import settings
 from .logging_config import setup_logging
-from .models import ResearchConfig, ResearchDepth
+from .models import ReportStyle, ResearchConfig, ResearchDepth
 from .output.report import display_report, save_report
 from .pipeline.orchestrator import arun_research, acontinue_research
 from .pipeline.agent import arun_agent_research
@@ -51,6 +51,11 @@ def parse_args() -> argparse.Namespace:
         help="Use a domain-specific research template",
     )
     parser.add_argument(
+        "--style", choices=["brief", "standard", "academic"],
+        default="standard",
+        help="Report style (default: %(default)s)",
+    )
+    parser.add_argument(
         "--agent", action="store_true",
         help="Use autonomous agent mode (decides when to search more or stop)",
     )
@@ -71,6 +76,7 @@ def parse_args() -> argparse.Namespace:
 
 def build_config(args: argparse.Namespace) -> ResearchConfig:
     config = ResearchConfig.from_depth(ResearchDepth(args.depth))
+    config.report_style = ReportStyle(args.style)
     if args.thinking:
         config.use_thinking = True
     if args.academic:

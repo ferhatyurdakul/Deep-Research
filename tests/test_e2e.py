@@ -21,7 +21,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from deep_research.config import settings
-from deep_research.models import ResearchConfig, ResearchDepth
+from deep_research.models import ReportStyle, ResearchConfig, ResearchDepth
 
 
 # --- Guards ---
@@ -155,6 +155,48 @@ class TestExtraction:
         assert result.word_count > 0
 
 
+class TestReportStyles:
+    def test_methodology_builder(self):
+        from deep_research.pipeline.synthesizer import _build_search_methodology
+        from deep_research.models import SourceAnalysis, SourceType
+
+        sources = [
+            SourceAnalysis(url="https://a.com", title="A", key_findings=["f"], source_type=SourceType.WEB),
+            SourceAnalysis(url="https://b.com", title="B", key_findings=["f"], source_type=SourceType.ARXIV),
+            SourceAnalysis(url="https://c.com", title="C", key_findings=["f"], source_type=SourceType.WEB, relevance="snippet only"),
+        ]
+        result = _build_search_methodology(sources, iterations=2, sub_question_count=5)
+        assert "5 sub-questions" in result
+        assert "3 sources" in result
+        assert "2 web sources" in result
+        assert "1 arXiv" in result
+        assert "2 were analyzed from full text" in result
+        assert "1 from snippets" in result
+
+    def test_style_prompt_brief(self):
+        from deep_research.pipeline.synthesizer import _get_style_prompt
+        structure, system = _get_style_prompt(ReportStyle.BRIEF, [], 1, 3)
+        assert "Research Brief" in structure
+        assert "500-1000 words" in structure
+
+    def test_style_prompt_academic(self):
+        from deep_research.pipeline.synthesizer import _get_style_prompt
+        from deep_research.models import SourceAnalysis, SourceType
+        sources = [SourceAnalysis(url="https://a.com", title="A", key_findings=["f"], source_type=SourceType.WEB)]
+        structure, system = _get_style_prompt(ReportStyle.ACADEMIC, sources, 1, 3)
+        assert "Abstract" in structure
+        assert "Methodology" in structure
+        assert "Discussion" in structure
+        assert "Limitations and Uncertainty" in structure
+        assert "academic" in system.lower()
+
+    def test_style_prompt_standard(self):
+        from deep_research.pipeline.synthesizer import _get_style_prompt
+        structure, system = _get_style_prompt(ReportStyle.STANDARD, [], 1, 3)
+        assert "Executive Summary" in structure
+        assert "Key Findings" in structure
+
+
 class TestTemplates:
     def test_list_templates(self):
         from deep_research.pipeline.templates import list_templates
@@ -194,6 +236,20 @@ class TestModels:
     def test_max_sources(self):
         config = ResearchConfig.from_depth(ResearchDepth.STANDARD)
         assert config.max_sources == 30
+
+    def test_report_style_default(self):
+        config = ResearchConfig.from_depth(ResearchDepth.STANDARD)
+        assert config.report_style == ReportStyle.STANDARD
+
+    def test_report_style_override(self):
+        config = ResearchConfig.from_depth(ResearchDepth.QUICK)
+        config.report_style = ReportStyle.ACADEMIC
+        assert config.report_style == ReportStyle.ACADEMIC
+
+    def test_report_style_enum_values(self):
+        assert ReportStyle.BRIEF == "brief"
+        assert ReportStyle.STANDARD == "standard"
+        assert ReportStyle.ACADEMIC == "academic"
 
 
 # --- Integration: research pipeline ---

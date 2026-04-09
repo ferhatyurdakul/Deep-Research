@@ -13,6 +13,12 @@ class ResearchDepth(str, Enum):
     DEEP = "deep"
 
 
+class ReportStyle(str, Enum):
+    BRIEF = "brief"          # executive summary + key findings + references
+    STANDARD = "standard"    # current default structure
+    ACADEMIC = "academic"    # abstract, research question, methodology, findings, discussion, limitations, references
+
+
 class ModelRouter(BaseModel):
     """Routes different pipeline stages to different models."""
     decompose: str = ""     # fast model for query decomposition
@@ -28,6 +34,7 @@ class ModelRouter(BaseModel):
 
 class ResearchConfig(BaseModel):
     depth: ResearchDepth = ResearchDepth.STANDARD
+    report_style: ReportStyle = ReportStyle.STANDARD
     max_sub_questions: int = 5
     max_search_results: int = 5
     max_scrape_pages: int = 3

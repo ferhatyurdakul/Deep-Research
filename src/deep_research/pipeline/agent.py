@@ -287,6 +287,8 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
             thinking=config.use_thinking, model=config.models.get("synthesize"),
             template_guidance=tmpl.synthesis_guidance if tmpl else "",
             system_prompt=tmpl.system_prompt if tmpl else "",
+            report_style=config.report_style,
+            iteration_count=len(report.iterations),
         )
         report.executive_summary = executive
         report.detailed_findings = detailed
