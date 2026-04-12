@@ -93,6 +93,7 @@ async def _agent_search_and_analyze(
         sources=sources_to_search,
         max_results_per_query=config.max_search_results,
         max_total=config.max_sources,
+        academic_weight=0.65 if config.use_academic_search else 0.5,
     )
 
     new_results = [r for r in search_results if r.url not in seen_urls]

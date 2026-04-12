@@ -119,6 +119,108 @@ class TestAcademicSearch:
         assert len(deduped) == 2  # "Paper A" deduped by URL
 
 
+class TestDeduplicationAndScoring:
+    """Tests for enhanced dedup (DOI/arXiv ID) and composite scoring."""
+
+    def test_dedup_by_arxiv_id(self):
+        """arXiv and Semantic Scholar returning same paper should dedup."""
+        from deep_research.search.aggregator import deduplicate_results
+        from deep_research.models import SearchResult, SourceType
+        results = [
+            SearchResult(
+                title="Attention Is All You Need",
+                url="https://arxiv.org/abs/1706.03762",
+                snippet="We propose the Transformer.",
+                source_type=SourceType.ARXIV,
+                extra={"arxiv_id": "1706.03762"},
+            ),
+            SearchResult(
+                title="Attention Is All You Need",
+                url="https://api.semanticscholar.org/paper/abc",
+                snippet="We propose the Transformer.",
+                source_type=SourceType.SEMANTIC_SCHOLAR,
+                extra={"arxiv_id": "1706.03762", "doi": "10.5555/abc"},
+            ),
+        ]
+        deduped = deduplicate_results(results)
+        assert len(deduped) == 1
+        # arXiv should win (higher priority)
+        assert deduped[0].source_type == SourceType.ARXIV
+
+    def test_dedup_by_doi(self):
+        from deep_research.search.aggregator import deduplicate_results
+        from deep_research.models import SearchResult, SourceType
+        results = [
+            SearchResult(
+                title="Some Journal Paper",
+                url="https://nature.com/article/123",
+                snippet="...", source_type=SourceType.WEB,
+                extra={"doi": "10.1038/s41586-024-00001"},
+            ),
+            SearchResult(
+                title="Some Journal Paper (preprint)",
+                url="https://api.semanticscholar.org/paper/xyz",
+                snippet="...", source_type=SourceType.SEMANTIC_SCHOLAR,
+                extra={"doi": "10.1038/s41586-024-00001"},
+            ),
+        ]
+        deduped = deduplicate_results(results)
+        assert len(deduped) == 1
+
+    def test_dedup_preserves_unique(self):
+        from deep_research.search.aggregator import deduplicate_results
+        from deep_research.models import SearchResult, SourceType
+        results = [
+            SearchResult(title="Paper A", url="https://a.com", snippet="", source_type=SourceType.WEB),
+            SearchResult(title="Paper B", url="https://b.com", snippet="", source_type=SourceType.WEB),
+            SearchResult(title="Paper C", url="https://c.com", snippet="", source_type=SourceType.ARXIV),
+        ]
+        deduped = deduplicate_results(results)
+        assert len(deduped) == 3
+
+    def test_composite_score_academic_bonus(self):
+        from deep_research.search.aggregator import compute_source_score
+        from deep_research.models import SearchResult, SourceType
+        web = SearchResult(title="Blog", url="https://blog.com/x", snippet="...", source_type=SourceType.WEB)
+        arxiv = SearchResult(title="Paper", url="https://arxiv.org/abs/1234", snippet="...", source_type=SourceType.ARXIV)
+        assert compute_source_score(arxiv) > compute_source_score(web)
+
+    def test_composite_score_citation_count(self):
+        from deep_research.search.aggregator import compute_source_score
+        from deep_research.models import SearchResult, SourceType
+        low = SearchResult(title="Paper", url="https://arxiv.org/abs/1", snippet="...",
+                           source_type=SourceType.SEMANTIC_SCHOLAR, extra={"citation_count": 2})
+        high = SearchResult(title="Paper", url="https://arxiv.org/abs/2", snippet="...",
+                            source_type=SourceType.SEMANTIC_SCHOLAR, extra={"citation_count": 500})
+        assert compute_source_score(high) > compute_source_score(low)
+
+    def test_composite_score_recency(self):
+        from deep_research.search.aggregator import compute_source_score
+        from deep_research.models import SearchResult, SourceType
+        old = SearchResult(title="Old", url="https://a.com", snippet="...",
+                           source_type=SourceType.WEB, published_date="2015-01-01")
+        new = SearchResult(title="New", url="https://b.com", snippet="...",
+                           source_type=SourceType.WEB, published_date="2024-06-01")
+        assert compute_source_score(new) > compute_source_score(old)
+
+    def test_domain_reliability_high(self):
+        from deep_research.search.aggregator import domain_reliability_score
+        assert domain_reliability_score("https://nature.com/articles/123") == 1.0
+        assert domain_reliability_score("https://pubmed.ncbi.nlm.nih.gov/12345") == 1.0
+        assert domain_reliability_score("https://arxiv.org/abs/1234") == 1.0
+        assert domain_reliability_score("https://www.stanford.edu/paper") == 1.0
+
+    def test_domain_reliability_low(self):
+        from deep_research.search.aggregator import domain_reliability_score
+        assert domain_reliability_score("https://www.pinterest.com/pin/123") == 0.2
+        assert domain_reliability_score("https://quora.com/question/what") == 0.2
+
+    def test_domain_reliability_neutral(self):
+        from deep_research.search.aggregator import domain_reliability_score
+        score = domain_reliability_score("https://randomsite.com/page")
+        assert score == 0.5
+
+
 class TestExtraction:
     @pytest.mark.asyncio
     async def test_html_scrape(self):

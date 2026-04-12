@@ -63,6 +63,7 @@ async def _search_and_analyze(
         sources=sources_to_search,
         max_results_per_query=config.max_search_results,
         max_total=config.max_sources,
+        academic_weight=0.65 if config.use_academic_search else 0.5,
     )
     progress.update(task, completed=True, description=f"[green]Found {len(search_results)} results")
 
