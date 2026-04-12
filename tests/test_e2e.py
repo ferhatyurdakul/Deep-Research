@@ -197,6 +197,82 @@ class TestReportStyles:
         assert "Key Findings" in structure
 
 
+class TestEvidenceExtraction:
+    def test_format_analyses_shows_evidenced_findings(self):
+        from deep_research.pipeline.analyzer import format_analyses
+        from deep_research.models import (
+            ContentDepth,
+            EvidencedFinding,
+            SourceAnalysis,
+            SourceType,
+        )
+
+        sa = SourceAnalysis(
+            url="https://arxiv.org/abs/1706.03762",
+            title="Attention Is All You Need",
+            key_findings=["Transformer replaces recurrence with attention."],
+            evidenced_findings=[
+                EvidencedFinding(
+                    finding="Transformer replaces recurrence with attention.",
+                    evidence="We propose a new simple network architecture, the Transformer, based solely on attention mechanisms.",
+                    confidence="supported",
+                ),
+                EvidencedFinding(
+                    finding="Training is faster than RNNs.",
+                    evidence="",
+                    confidence="inferred",
+                ),
+            ],
+            content_depth=ContentDepth.ABSTRACT,
+            source_type=SourceType.ARXIV,
+        )
+        out = format_analyses([sa])
+        assert "Findings with evidence:" in out
+        assert "Transformer replaces recurrence" in out
+        assert "based solely on attention mechanisms" in out
+        # Non-"supported" confidence should be annotated
+        assert "[inferred]" in out
+        # Content depth label should appear
+        assert "abstract" in out
+
+    def test_format_analyses_snippet_depth_label(self):
+        from deep_research.pipeline.analyzer import format_analyses
+        from deep_research.models import ContentDepth, SourceAnalysis, SourceType
+
+        sa = SourceAnalysis(
+            url="https://example.com",
+            title="Ex",
+            key_findings=["partial data from snippet"],
+            content_depth=ContentDepth.SNIPPET,
+            source_type=SourceType.WEB,
+        )
+        out = format_analyses([sa])
+        assert "snippet" in out
+
+    def test_format_analyses_falls_back_to_flat_lists(self):
+        """Old-format SourceAnalysis (no evidenced_findings) should still render."""
+        from deep_research.pipeline.analyzer import format_analyses
+        from deep_research.models import SourceAnalysis, SourceType
+
+        sa = SourceAnalysis(
+            url="https://example.com",
+            title="Legacy",
+            key_findings=["legacy finding"],
+            key_evidence=["legacy evidence quote"],
+            source_type=SourceType.WEB,
+        )
+        out = format_analyses([sa])
+        assert "legacy finding" in out
+        assert "legacy evidence quote" in out
+
+    def test_analyze_prompt_requests_evidenced_findings(self):
+        """The ANALYZE_PROMPT must ask the LLM for evidenced_findings schema."""
+        from deep_research.pipeline.analyzer import ANALYZE_PROMPT
+        assert "evidenced_findings" in ANALYZE_PROMPT
+        assert "verbatim" in ANALYZE_PROMPT.lower()
+        assert "confidence" in ANALYZE_PROMPT
+
+
 class TestTemplates:
     def test_list_templates(self):
         from deep_research.pipeline.templates import list_templates
@@ -507,7 +583,13 @@ class TestDatabaseEnriched:
         monkeypatch.setattr(db_mod, "DB_PATH", test_db)
 
         from deep_research.storage.db import init_db, save_report, load_report
-        from deep_research.models import ResearchReport, SourceAnalysis, SourceType
+        from deep_research.models import (
+            ContentDepth,
+            EvidencedFinding,
+            ResearchReport,
+            SourceAnalysis,
+            SourceType,
+        )
 
         init_db()
 
@@ -518,6 +600,14 @@ class TestDatabaseEnriched:
                 title="Attention Is All You Need",
                 key_findings=["transformers"],
                 key_evidence=["The dominant sequence transduction models are based on complex recurrent or convolutional neural networks."],
+                evidenced_findings=[
+                    EvidencedFinding(
+                        finding="Transformers replace recurrence with attention.",
+                        evidence="The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+                        confidence="supported",
+                    ),
+                ],
+                content_depth=ContentDepth.ABSTRACT,
                 relevance="high",
                 summary="Introduces the transformer architecture.",
                 source_type=SourceType.ARXIV,
@@ -541,3 +631,7 @@ class TestDatabaseEnriched:
         assert s.extra["arxiv_id"] == "1706.03762"
         assert len(s.key_evidence) == 1
         assert "dominant sequence" in s.key_evidence[0]
+        assert s.content_depth == ContentDepth.ABSTRACT
+        assert len(s.evidenced_findings) == 1
+        assert s.evidenced_findings[0].finding.startswith("Transformers")
+        assert s.evidenced_findings[0].confidence == "supported"

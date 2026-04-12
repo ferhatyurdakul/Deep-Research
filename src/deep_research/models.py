@@ -105,6 +105,20 @@ class ScrapedContent(BaseModel):
     word_count: int = 0
 
 
+class ContentDepth(str, Enum):
+    """How much of a source's content was available for analysis."""
+    FULL_TEXT = "full_text"   # full page/PDF extracted
+    ABSTRACT = "abstract"     # arXiv abstract or similar
+    SNIPPET = "snippet"       # search result snippet only
+
+
+class EvidencedFinding(BaseModel):
+    """A finding paired with its supporting evidence from the source."""
+    finding: str                    # interpreted finding (may be paraphrased)
+    evidence: str = ""              # verbatim quote or data point from source
+    confidence: str = "supported"   # supported / partially_supported / inferred
+
+
 class ExtractedData(BaseModel):
     """Structured data extracted from a source."""
     statistics: list[str] = Field(default_factory=list)   # numbers, percentages, metrics
@@ -118,6 +132,8 @@ class SourceAnalysis(BaseModel):
     title: str
     key_findings: list[str]
     key_evidence: list[str] = Field(default_factory=list)  # verbatim quotes / specific data points
+    evidenced_findings: list[EvidencedFinding] = Field(default_factory=list)  # paired finding+evidence
+    content_depth: ContentDepth = ContentDepth.FULL_TEXT
     relevance: str = ""
     summary: str = ""  # concise 2-4 sentence summary for synthesis
     source_type: SourceType = SourceType.WEB

@@ -4,6 +4,8 @@ import asyncio
 
 from deep_research.llm import achat, achat_json
 from deep_research.models import (
+    ContentDepth,
+    EvidencedFinding,
     ExtractedData,
     KnowledgeGap,
     SourceAnalysis,
@@ -22,7 +24,7 @@ def _get_semaphore() -> asyncio.Semaphore:
         _semaphore_cache[loop_id] = asyncio.Semaphore(5)
     return _semaphore_cache[loop_id]
 
-ANALYZE_PROMPT = """You are a research analyst. Analyze the following source material and extract key findings relevant to the research question.
+ANALYZE_PROMPT = """You are a research analyst. Analyze the following source material and extract key findings relevant to the research question. Each finding MUST be paired with verbatim evidence from the source.
 
 Research question: {query}
 
@@ -33,16 +35,23 @@ Content:
 
 Respond in JSON format:
 {{
-  "key_findings": ["finding 1", "finding 2", ...],
-  "key_evidence": ["verbatim quote or specific data point from the source text that supports a finding", ...],
+  "evidenced_findings": [
+    {{
+      "finding": "your interpreted finding (1-2 sentences)",
+      "evidence": "verbatim quote or specific data point copied exactly from the source that supports this finding",
+      "confidence": "supported|partially_supported|inferred"
+    }}
+  ],
   "relevance": "high/medium/low and brief explanation"
 }}
 
-IMPORTANT for key_evidence:
-- Extract 2-5 direct quotes or specific data points (numbers, statistics, dates) exactly as they appear in the source
-- Each piece of evidence should be a short verbatim excerpt (1-2 sentences) that could be cited in a research report
-- If the source has specific numbers, percentages, or metrics, include them verbatim
-- Do NOT paraphrase — copy the exact wording from the source"""
+RULES:
+- Return 3-6 evidenced findings, ordered by relevance to the research question
+- "evidence" must be a VERBATIM excerpt (1-2 sentences) copied directly from the source text — do NOT paraphrase
+- If the source has specific numbers, percentages, or metrics, include them exactly in the evidence
+- "confidence" levels: "supported" = evidence directly states the finding; "partially_supported" = evidence implies it but doesn't state it directly; "inferred" = finding is your interpretation beyond what the text explicitly says
+- If you cannot find verbatim evidence for a finding, set evidence to "" and confidence to "inferred"
+- Prefer findings with concrete evidence over vague interpretations"""
 
 EXTRACT_DATA_PROMPT = """You are a data extraction specialist. From the following source content, extract structured data.
 
@@ -101,24 +110,37 @@ def format_analyses(analyses: list[SourceAnalysis]) -> str:
         if len(a.authors) > 3:
             authors += " et al."
         date = a.published_date or "N/A"
+        depth_label = a.content_depth.value.replace("_", " ")
 
         lines = [
             f"[{i}] {a.title}",
             f"URL: {a.url}",
-            f"Authors: {authors} | Date: {date} | Type: {a.source_type.value}",
+            f"Authors: {authors} | Date: {date} | Type: {a.source_type.value} | Content: {depth_label}",
         ]
         if a.summary:
             lines.append(f"Summary: {a.summary}")
         if a.relevance:
             lines.append(f"Relevance: {a.relevance}")
-        if a.key_findings:
-            lines.append("Findings:")
-            for f in a.key_findings:
-                lines.append(f"  - {f}")
-        if a.key_evidence:
-            lines.append("Direct evidence (verbatim from source):")
-            for ev in a.key_evidence:
-                lines.append(f'  > "{ev}"')
+
+        # Prefer evidenced findings (paired finding+evidence) over flat lists
+        if a.evidenced_findings:
+            lines.append("Findings with evidence:")
+            for ef in a.evidenced_findings:
+                conf = f" [{ef.confidence}]" if ef.confidence != "supported" else ""
+                lines.append(f"  - {ef.finding}{conf}")
+                if ef.evidence:
+                    lines.append(f'    Evidence: "{ef.evidence}"')
+        else:
+            # Fallback to flat lists for backward compat
+            if a.key_findings:
+                lines.append("Findings:")
+                for f in a.key_findings:
+                    lines.append(f"  - {f}")
+            if a.key_evidence:
+                lines.append("Direct evidence (verbatim from source):")
+                for ev in a.key_evidence:
+                    lines.append(f'  > "{ev}"')
+
         if a.extracted_data:
             ed = a.extracted_data
             if ed.statistics:
@@ -162,6 +184,7 @@ async def aanalyze_source(
     authors: list[str] | None = None,
     published_date: str = "",
     extra: dict | None = None,
+    content_depth: ContentDepth = ContentDepth.FULL_TEXT,
 ) -> SourceAnalysis:
     async with _get_semaphore():
         prompt = ANALYZE_PROMPT.format(query=query, url=url, title=title, content=content)
@@ -169,10 +192,35 @@ async def aanalyze_source(
 
     summary = await asummarize_source(query, title, content, model=model)
 
+    # Parse evidenced findings from new format
+    raw_ef = data.get("evidenced_findings", [])
+    evidenced = []
+    key_findings = []
+    key_evidence = []
+    for ef in raw_ef:
+        if isinstance(ef, dict):
+            finding = ef.get("finding", "")
+            evidence = ef.get("evidence", "")
+            confidence = ef.get("confidence", "supported")
+            if finding:
+                evidenced.append(EvidencedFinding(
+                    finding=finding, evidence=evidence, confidence=confidence,
+                ))
+                key_findings.append(finding)
+                if evidence:
+                    key_evidence.append(evidence)
+
+    # Fallback: if LLM returned old flat format instead
+    if not evidenced:
+        key_findings = data.get("key_findings", [])
+        key_evidence = data.get("key_evidence", [])
+
     sa = SourceAnalysis(
         url=url, title=title,
-        key_findings=data.get("key_findings", []),
-        key_evidence=data.get("key_evidence", []),
+        key_findings=key_findings,
+        key_evidence=key_evidence,
+        evidenced_findings=evidenced,
+        content_depth=content_depth,
         relevance=data.get("relevance", ""),
         summary=summary.strip(),
         source_type=source_type,

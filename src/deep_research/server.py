@@ -11,7 +11,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from .config import settings
-from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport, SourceType
+from .models import ContentDepth, ReportStyle, ResearchConfig, ResearchDepth, ResearchReport, SourceType
 from .output.report import format_report_markdown, save_report
 from .pipeline.templates import list_templates, get_template
 from .storage.db import (
@@ -147,6 +147,10 @@ async def run_research_with_ws(
             analyze_tasks = []
             for p in scraped:
                 sr = url_to_result.get(p.url)
+                if sr and sr.source_type == SourceType.ARXIV and p.word_count < 1000:
+                    depth = ContentDepth.ABSTRACT
+                else:
+                    depth = ContentDepth.FULL_TEXT
                 analyze_tasks.append(aanalyze_source(
                     query, p.url, p.title, p.content,
                     thinking=config.use_thinking, model=config.models.get("analyze"),
@@ -155,6 +159,7 @@ async def run_research_with_ws(
                     authors=sr.authors if sr else [],
                     published_date=sr.published_date if sr else "",
                     extra=sr.extra if sr else {},
+                    content_depth=depth,
                 ))
             analyzed = list(await asyncio.gather(*analyze_tasks))
             iteration.sources = analyzed
@@ -168,6 +173,7 @@ async def run_research_with_ws(
                 report.sources.append(SourceAnalysis(
                     url=r.url, title=r.title,
                     key_findings=[r.snippet], relevance="snippet only",
+                    content_depth=ContentDepth.SNIPPET,
                     source_type=r.source_type, authors=r.authors,
                     published_date=r.published_date, extra=r.extra,
                 ))
@@ -271,6 +277,10 @@ async def run_agent_with_ws(
         analyze_tasks = []
         for p in scraped:
             sr = url_to_result.get(p.url)
+            if sr and sr.source_type == SourceType.ARXIV and p.word_count < 1000:
+                depth = ContentDepth.ABSTRACT
+            else:
+                depth = ContentDepth.FULL_TEXT
             analyze_tasks.append(aanalyze_source(
                 query, p.url, p.title, p.content,
                 thinking=config.use_thinking, model=config.models.get("analyze"),
@@ -279,6 +289,7 @@ async def run_agent_with_ws(
                 authors=sr.authors if sr else [],
                 published_date=sr.published_date if sr else "",
                 extra=sr.extra if sr else {},
+                content_depth=depth,
             ))
         analyzed = list(await asyncio.gather(*analyze_tasks))
 
@@ -287,6 +298,7 @@ async def run_agent_with_ws(
         if r.url not in scraped_urls and r.snippet:
             report.sources.append(SourceAnalysis(
                 url=r.url, title=r.title, key_findings=[r.snippet], relevance="snippet only",
+                content_depth=ContentDepth.SNIPPET,
                 source_type=r.source_type, authors=r.authors,
                 published_date=r.published_date, extra=r.extra,
             ))
@@ -348,6 +360,10 @@ async def run_agent_with_ws(
                 analyze_tasks = []
                 for p in scraped:
                     sr = url_to_result2.get(p.url)
+                    if sr and sr.source_type == SourceType.ARXIV and p.word_count < 1000:
+                        depth = ContentDepth.ABSTRACT
+                    else:
+                        depth = ContentDepth.FULL_TEXT
                     analyze_tasks.append(aanalyze_source(
                         query, p.url, p.title, p.content,
                         thinking=config.use_thinking, model=config.models.get("analyze"),
@@ -356,6 +372,7 @@ async def run_agent_with_ws(
                         authors=sr.authors if sr else [],
                         published_date=sr.published_date if sr else "",
                         extra=sr.extra if sr else {},
+                        content_depth=depth,
                     ))
                 analyzed = list(await asyncio.gather(*analyze_tasks))
             else:
@@ -366,6 +383,7 @@ async def run_agent_with_ws(
                 if r.url not in scraped_urls and r.snippet:
                     report.sources.append(SourceAnalysis(
                         url=r.url, title=r.title, key_findings=[r.snippet], relevance="snippet only",
+                        content_depth=ContentDepth.SNIPPET,
                         source_type=r.source_type, authors=r.authors,
                         published_date=r.published_date, extra=r.extra,
                     ))

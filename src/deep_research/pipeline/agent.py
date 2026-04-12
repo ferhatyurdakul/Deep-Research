@@ -11,6 +11,7 @@ from deep_research.config import settings
 from deep_research.extraction.parser import ContentParser
 from deep_research.llm import achat_json
 from deep_research.models import (
+    ContentDepth,
     KnowledgeGap,
     ResearchConfig,
     ResearchDepth,
@@ -111,6 +112,10 @@ async def _agent_search_and_analyze(
         analyze_tasks = []
         for p in scraped:
             sr = url_to_result.get(p.url)
+            if sr and sr.source_type == SourceType.ARXIV and p.word_count < 1000:
+                depth = ContentDepth.ABSTRACT
+            else:
+                depth = ContentDepth.FULL_TEXT
             analyze_tasks.append(aanalyze_source(
                 query, p.url, p.title, p.content,
                 thinking=config.use_thinking,
@@ -120,6 +125,7 @@ async def _agent_search_and_analyze(
                 authors=sr.authors if sr else [],
                 published_date=sr.published_date if sr else "",
                 extra=sr.extra if sr else {},
+                content_depth=depth,
             ))
         analyzed = list(await asyncio.gather(*analyze_tasks))
 
@@ -128,6 +134,7 @@ async def _agent_search_and_analyze(
         SourceAnalysis(
             url=r.url, title=r.title,
             key_findings=[r.snippet], relevance="snippet only",
+            content_depth=ContentDepth.SNIPPET,
             source_type=r.source_type,
             authors=r.authors,
             published_date=r.published_date,

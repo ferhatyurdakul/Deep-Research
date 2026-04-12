@@ -6,6 +6,8 @@ from datetime import datetime
 
 from deep_research.config import DB_PATH
 from deep_research.models import (
+    ContentDepth,
+    EvidencedFinding,
     KnowledgeGap,
     ResearchIteration,
     ResearchReport,
@@ -58,6 +60,8 @@ _MIGRATIONS = [
     "ALTER TABLE sources ADD COLUMN published_date TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE sources ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'",
     "ALTER TABLE sources ADD COLUMN key_evidence TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE sources ADD COLUMN evidenced_findings TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE sources ADD COLUMN content_depth TEXT NOT NULL DEFAULT 'full_text'",
 ]
 
 
@@ -104,8 +108,9 @@ def save_report(report: ResearchReport, depth: str = "standard") -> int:
         for source in report.sources:
             conn.execute(
                 """INSERT INTO sources (session_id, url, title, key_findings, relevance,
-                   summary, source_type, authors, published_date, extra, key_evidence)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   summary, source_type, authors, published_date, extra, key_evidence,
+                   evidenced_findings, content_depth)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source.url,
@@ -118,6 +123,8 @@ def save_report(report: ResearchReport, depth: str = "standard") -> int:
                     source.published_date,
                     json.dumps(source.extra),
                     json.dumps(source.key_evidence),
+                    json.dumps([ef.model_dump() for ef in source.evidenced_findings]),
+                    source.content_depth.value,
                 ),
             )
             now = datetime.now().isoformat()
@@ -149,17 +156,27 @@ def load_report(session_id: int) -> ResearchReport | None:
 
         sources = []
         for s in source_rows:
+            keys = s.keys()
+            ef_raw = json.loads(s["evidenced_findings"]) if "evidenced_findings" in keys else []
+            evidenced = [EvidencedFinding(**ef) for ef in ef_raw]
+            depth_val = s["content_depth"] if "content_depth" in keys else "full_text"
+            try:
+                content_depth = ContentDepth(depth_val)
+            except ValueError:
+                content_depth = ContentDepth.FULL_TEXT
             sa = SourceAnalysis(
                 url=s["url"],
                 title=s["title"],
                 key_findings=json.loads(s["key_findings"]),
-                key_evidence=json.loads(s["key_evidence"]) if "key_evidence" in s.keys() else [],
+                key_evidence=json.loads(s["key_evidence"]) if "key_evidence" in keys else [],
+                evidenced_findings=evidenced,
+                content_depth=content_depth,
                 relevance=s["relevance"],
-                summary=s["summary"] if "summary" in s.keys() else "",
-                source_type=SourceType(s["source_type"]) if "source_type" in s.keys() else SourceType.WEB,
-                authors=json.loads(s["authors"]) if "authors" in s.keys() else [],
-                published_date=s["published_date"] if "published_date" in s.keys() else "",
-                extra=json.loads(s["extra"]) if "extra" in s.keys() else {},
+                summary=s["summary"] if "summary" in keys else "",
+                source_type=SourceType(s["source_type"]) if "source_type" in keys else SourceType.WEB,
+                authors=json.loads(s["authors"]) if "authors" in keys else [],
+                published_date=s["published_date"] if "published_date" in keys else "",
+                extra=json.loads(s["extra"]) if "extra" in keys else {},
             )
             sources.append(sa)
 
