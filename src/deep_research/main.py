@@ -15,7 +15,13 @@ from .models import ReportStyle, ResearchConfig, ResearchDepth
 from .output.report import display_report, save_report
 from .pipeline.orchestrator import arun_research, acontinue_research
 from .pipeline.agent import arun_agent_research
-from .storage.db import save_report as db_save, load_report as db_load, list_sessions, delete_session
+from .storage.db import (
+    save_report as db_save,
+    load_report as db_load,
+    list_sessions,
+    delete_session,
+    fork_session,
+)
 
 console = Console()
 
@@ -68,6 +74,14 @@ def parse_args() -> argparse.Namespace:
         help="Continue a previous research session by ID",
     )
     parser.add_argument(
+        "--fork-session", type=int, metavar="ID",
+        help="Fork a previous session into a new session (copy, leaves original untouched)",
+    )
+    parser.add_argument(
+        "--fork-query", type=str, default="",
+        help="When used with --fork-session, set a different query on the fork",
+    )
+    parser.add_argument(
         "--delete", type=int, metavar="ID",
         help="Delete a research session by ID",
     )
@@ -95,6 +109,7 @@ def show_history() -> None:
 
     table = Table(title="Research History")
     table.add_column("ID", style="cyan", justify="right")
+    table.add_column("Parent", style="magenta", justify="right")
     table.add_column("Query", style="white", max_width=60)
     table.add_column("Depth", style="yellow")
     table.add_column("Sources", justify="right")
@@ -102,8 +117,10 @@ def show_history() -> None:
 
     for s in sessions:
         date_str = s["created_at"][:16].replace("T", " ")
+        parent = s.get("parent_session_id")
         table.add_row(
             str(s["id"]),
+            str(parent) if parent else "",
             s["query"][:60],
             s["depth"],
             str(s["source_count"]),
@@ -112,7 +129,8 @@ def show_history() -> None:
 
     console.print(table)
     console.print(
-        "\n[dim]Use --continue-session ID to deepen a previous session[/dim]"
+        "\n[dim]--continue-session ID to deepen a session; "
+        "--fork-session ID to copy it into a new branch[/dim]"
     )
 
 
@@ -160,10 +178,10 @@ async def async_continue(session_id: int, config: ResearchConfig) -> None:
     display_report(report)
 
     path = save_report(report)
-    new_id = db_save(report, depth=config.depth.value)
+    new_id = db_save(report, depth=config.depth.value, parent_session_id=session_id)
     report.id = new_id
     console.print(f"[green]Report saved to:[/green] {path}")
-    console.print(f"[green]New session ID:[/green] {new_id}\n")
+    console.print(f"[green]New session ID:[/green] {new_id} [dim](parent: {session_id})[/dim]\n")
 
     await followup_loop(report, config)
 
@@ -209,6 +227,23 @@ def main() -> None:
             console.print(f"[green]Session {args.delete} deleted.[/green]")
         else:
             console.print(f"[red]Session {args.delete} not found.[/red]")
+        return
+
+    if args.fork_session:
+        new_query = args.fork_query.strip() or None
+        new_id = fork_session(args.fork_session, new_query=new_query)
+        if new_id is None:
+            console.print(f"[red]Session {args.fork_session} not found.[/red]")
+            sys.exit(1)
+        console.print(
+            f"[green]Forked session {args.fork_session} -> new session {new_id}.[/green]"
+        )
+        if new_query:
+            console.print(f"[dim]Fork query: {new_query}[/dim]")
+        console.print(
+            f"[dim]Run --continue-session {new_id} to refine the fork "
+            f"without touching session {args.fork_session}.[/dim]"
+        )
         return
 
     config = build_config(args)

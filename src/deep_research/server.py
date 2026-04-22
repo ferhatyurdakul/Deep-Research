@@ -7,7 +7,7 @@ from pathlib import Path
 
 import markdown
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from .config import settings
@@ -19,6 +19,7 @@ from .storage.db import (
     load_report as db_load,
     list_sessions,
     delete_session,
+    fork_session,
 )
 
 logger = logging.getLogger(__name__)
@@ -449,6 +450,7 @@ async def get_session(session_id: int):
         return JSONResponse({"error": "Session not found"}, status_code=404)
     return {
         "id": report.id,
+        "parent_session_id": report.parent_session_id,
         "query": report.query,
         "executive_summary": report.executive_summary,
         "detailed_findings": report.detailed_findings,
@@ -459,6 +461,24 @@ async def get_session(session_id: int):
         "created_at": report.created_at.isoformat(),
         "markdown": format_report_markdown(report),
         "html": markdown.markdown(format_report_markdown(report), extensions=["tables", "fenced_code"]),
+    }
+
+
+@app.post("/api/session/{session_id}/fork")
+async def fork_existing_session(session_id: int, request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    new_query = (body.get("query") or "").strip() or None
+
+    new_id = fork_session(session_id, new_query=new_query)
+    if new_id is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    return {
+        "id": new_id,
+        "parent_session_id": session_id,
+        "query": new_query,
     }
 
 
