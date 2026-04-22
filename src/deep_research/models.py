@@ -162,6 +162,7 @@ class ResearchIteration(BaseModel):
 
 class ResearchReport(BaseModel):
     id: Optional[int] = None
+    parent_session_id: Optional[int] = None
     query: str
     sub_questions: list[SubQuestion] = Field(default_factory=list)
     sources: list[SourceAnalysis] = Field(default_factory=list)

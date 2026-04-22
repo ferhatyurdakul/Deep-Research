@@ -62,6 +62,7 @@ _MIGRATIONS = [
     "ALTER TABLE sources ADD COLUMN key_evidence TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE sources ADD COLUMN evidenced_findings TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE sources ADD COLUMN content_depth TEXT NOT NULL DEFAULT 'full_text'",
+    "ALTER TABLE research_sessions ADD COLUMN parent_session_id INTEGER",
 ]
 
 
@@ -83,14 +84,20 @@ def init_db() -> None:
                 pass  # column already exists
 
 
-def save_report(report: ResearchReport, depth: str = "standard") -> int:
+def save_report(
+    report: ResearchReport,
+    depth: str = "standard",
+    parent_session_id: int | None = None,
+) -> int:
     init_db()
+    parent = parent_session_id if parent_session_id is not None else report.parent_session_id
     with _get_conn() as conn:
         cursor = conn.execute(
             """INSERT INTO research_sessions
                (query, depth, executive_summary, detailed_findings,
-                follow_up_questions, sub_questions, iterations, searched_urls, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                follow_up_questions, sub_questions, iterations, searched_urls,
+                created_at, parent_session_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 report.query,
                 depth,
@@ -101,6 +108,7 @@ def save_report(report: ResearchReport, depth: str = "standard") -> int:
                 json.dumps([it.model_dump() for it in report.iterations]),
                 json.dumps(report.searched_urls),
                 report.created_at.isoformat(),
+                parent,
             ),
         )
         session_id = cursor.lastrowid
@@ -192,8 +200,11 @@ def load_report(session_id: int) -> ResearchReport | None:
                 knowledge_gaps=[KnowledgeGap(**g) for g in it_data.get("knowledge_gaps", [])],
             ))
 
+        row_keys = row.keys()
+        parent_id = row["parent_session_id"] if "parent_session_id" in row_keys else None
         return ResearchReport(
             id=row["id"],
+            parent_session_id=parent_id,
             query=row["query"],
             sub_questions=sub_questions,
             sources=sources,
@@ -210,7 +221,7 @@ def list_sessions(limit: int = 20) -> list[dict]:
     init_db()
     with _get_conn() as conn:
         rows = conn.execute(
-            """SELECT id, query, depth, created_at,
+            """SELECT id, query, depth, created_at, parent_session_id,
                       (SELECT COUNT(*) FROM sources WHERE session_id = research_sessions.id) as source_count
                FROM research_sessions
                ORDER BY created_at DESC
@@ -218,6 +229,40 @@ def list_sessions(limit: int = 20) -> list[dict]:
             (limit,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def fork_session(session_id: int, new_query: str | None = None) -> int | None:
+    """Create a copy of a session as a new session with parent_session_id set.
+
+    The copy is a point-in-time snapshot — it has all the same sources, sub-questions,
+    iterations, summaries, and searched URLs. The user can then refine the fork
+    (e.g. via --continue-session) without touching the original.
+
+    Returns the new session ID, or None if the source session doesn't exist.
+    """
+    original = load_report(session_id)
+    if original is None:
+        return None
+
+    fork = ResearchReport(
+        parent_session_id=session_id,
+        query=new_query if new_query else original.query,
+        sub_questions=list(original.sub_questions),
+        sources=list(original.sources),
+        iterations=list(original.iterations),
+        searched_urls=list(original.searched_urls),
+        executive_summary=original.executive_summary,
+        detailed_findings=original.detailed_findings,
+        follow_up_questions=list(original.follow_up_questions),
+    )
+
+    with _get_conn() as conn:
+        depth_row = conn.execute(
+            "SELECT depth FROM research_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    depth = depth_row["depth"] if depth_row else "standard"
+
+    return save_report(fork, depth=depth, parent_session_id=session_id)
 
 
 def get_known_urls() -> set[str]:

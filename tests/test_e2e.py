@@ -509,6 +509,122 @@ class TestDatabase:
         assert load_report(session_id) is None
 
 
+class TestSessionForking:
+    def _fresh_db(self, tmp_path, monkeypatch):
+        test_db = tmp_path / "fork.db"
+        import deep_research.config as cfg
+        import deep_research.storage.db as db_mod
+        monkeypatch.setattr(cfg, "DB_PATH", test_db)
+        monkeypatch.setattr(db_mod, "DB_PATH", test_db)
+        from deep_research.storage.db import init_db
+        init_db()
+
+    def test_fork_session_copies_all_artifacts(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import (
+            fork_session, load_report, save_report,
+        )
+        from deep_research.models import (
+            ResearchIteration,
+            ResearchReport,
+            SourceAnalysis,
+            SubQuestion,
+        )
+
+        original = ResearchReport(
+            query="Original question",
+            sub_questions=[SubQuestion(question="Q1", reasoning="r")],
+            sources=[SourceAnalysis(
+                url="https://a.com", title="A",
+                key_findings=["finding"], relevance="high",
+                summary="sum",
+            )],
+            iterations=[ResearchIteration(iteration_number=1)],
+            searched_urls=["https://a.com"],
+            executive_summary="Exec",
+            detailed_findings="## Details",
+            follow_up_questions=["Next?"],
+        )
+        orig_id = save_report(original, depth="standard")
+
+        fork_id = fork_session(orig_id)
+        assert fork_id is not None
+        assert fork_id != orig_id
+
+        forked = load_report(fork_id)
+        assert forked is not None
+        assert forked.parent_session_id == orig_id
+        assert forked.query == "Original question"
+        assert forked.executive_summary == "Exec"
+        assert forked.detailed_findings == "## Details"
+        assert forked.follow_up_questions == ["Next?"]
+        assert len(forked.sources) == 1
+        assert forked.sources[0].url == "https://a.com"
+        assert forked.sources[0].summary == "sum"
+        assert forked.searched_urls == ["https://a.com"]
+        assert len(forked.iterations) == 1
+
+    def test_fork_preserves_original(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import (
+            fork_session, load_report, save_report,
+        )
+        from deep_research.models import ResearchReport, SourceAnalysis
+
+        original = ResearchReport(
+            query="Keep me",
+            sources=[SourceAnalysis(url="https://a.com", title="A", key_findings=["x"])],
+            executive_summary="Keep",
+        )
+        orig_id = save_report(original, depth="standard")
+        fork_session(orig_id)
+
+        still_there = load_report(orig_id)
+        assert still_there is not None
+        assert still_there.query == "Keep me"
+        assert still_there.executive_summary == "Keep"
+        assert still_there.parent_session_id is None  # originals have no parent
+
+    def test_fork_with_new_query(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import (
+            fork_session, load_report, save_report,
+        )
+        from deep_research.models import ResearchReport, SourceAnalysis
+
+        original = ResearchReport(
+            query="Original",
+            sources=[SourceAnalysis(url="https://a.com", title="A", key_findings=["x"])],
+        )
+        orig_id = save_report(original, depth="standard")
+
+        fork_id = fork_session(orig_id, new_query="Refined variant")
+        forked = load_report(fork_id)
+        assert forked.query == "Refined variant"
+        assert forked.parent_session_id == orig_id
+        # Sources are still copied over
+        assert len(forked.sources) == 1
+
+    def test_fork_missing_session_returns_none(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import fork_session
+        assert fork_session(9999) is None
+
+    def test_list_sessions_includes_parent(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import (
+            fork_session, list_sessions, save_report,
+        )
+        from deep_research.models import ResearchReport
+
+        orig_id = save_report(ResearchReport(query="Q"), depth="quick")
+        fork_id = fork_session(orig_id)
+
+        rows = {s["id"]: s for s in list_sessions()}
+        assert rows[orig_id]["parent_session_id"] is None
+        assert rows[fork_id]["parent_session_id"] == orig_id
+
+
 # --- Report formatting ---
 
 class TestReport:
