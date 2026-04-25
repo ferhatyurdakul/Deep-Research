@@ -68,7 +68,10 @@ async def run_research_with_ws(
     )
 
     report = ResearchReport(query=query)
-    previously_known = get_known_urls()
+    if config.fresh:
+        previously_known = set()
+    else:
+        previously_known = get_known_urls()
     seen_urls: set[str] = set(previously_known)
     all_searched_queries: list[str] = []
 
@@ -226,7 +229,10 @@ async def run_agent_with_ws(
         if tmpl.use_extraction:
             config.use_extraction = True
 
-    previously_known = get_known_urls()
+    if config.fresh:
+        previously_known = set()
+    else:
+        previously_known = get_known_urls()
     seen_urls: set[str] = set(previously_known)
     all_searched_queries: list[str] = []
     from .pipeline.agent import MAX_AGENT_ITERATIONS
@@ -582,6 +588,7 @@ async def ws_research(ws: WebSocket):
         academic = data.get("academic", False)
         template = data.get("template", "")
         agent_mode = data.get("agent", False)
+        fresh = data.get("fresh", False)
 
         if not query:
             await ws.send_json({"event": "error", "data": "No query provided"})
@@ -596,6 +603,8 @@ async def ws_research(ws: WebSocket):
             config.use_academic_search = True
         if template:
             config.template = template
+        if fresh:
+            config.fresh = True
         config.load_model_routes()
 
         progress = WebSocketProgress(ws)

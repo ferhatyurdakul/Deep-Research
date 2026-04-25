@@ -44,6 +44,7 @@ class ResearchConfig(BaseModel):
     use_academic_search: bool = False
     use_extraction: bool = False
     template: Optional[str] = None  # template key from templates.py
+    fresh: bool = False
     models: ModelRouter = Field(default_factory=ModelRouter)
 
     @classmethod

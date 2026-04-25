@@ -162,7 +162,10 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")
 
     report = ResearchReport(query=query)
-    previously_known = get_known_urls()
+    if config.fresh:
+        previously_known = set()
+    else:
+        previously_known = get_known_urls()
     seen_urls: set[str] = set(previously_known)
     all_searched_queries: list[str] = []
     max_iters = min(config.max_iterations, MAX_AGENT_ITERATIONS)

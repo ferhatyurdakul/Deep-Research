@@ -67,25 +67,69 @@ deep-research-server
 ## CLI Reference
 
 ```bash
+# Interactive prompt (asks for the query)
+deep-research
+
+# Direct query
+deep-research "your research question"
+```
+
+### Flags
+
+```bash
 # Depth presets
 deep-research --depth quick "topic"             # 1 pass, fast
 deep-research --depth standard "topic"          # 2 passes, balanced (default)
 deep-research --depth deep "topic"              # 3 passes, thorough, academic sources
 
-# Features
-deep-research --agent "topic"                   # autonomous agent mode
+# Report style
+deep-research --style brief "topic"             # ~500-1000 words, summary + key findings
+deep-research --style standard "topic"          # ~2000-4000 words, themed sections (default)
+deep-research --style academic "topic"          # ~3000-5000 words, numbered sections + abstract + methodology
+
+# Pipeline features
+deep-research --agent "topic"                   # autonomous agent mode (decides when to stop)
 deep-research --academic "topic"                # include arXiv + Semantic Scholar
 deep-research --thinking "topic"                # enable chain-of-thought reasoning
 deep-research --template science "topic"        # domain-specific strategy
+deep-research --fresh "topic"                   # ignore URLs already analyzed in past sessions
 
-# Combine
-deep-research --agent --template science --depth deep "topic"
+# Combine flags freely
+deep-research --agent --template science --style academic --depth deep "topic"
 
 # Session management
 deep-research --history                         # list past sessions
 deep-research --continue-session 3              # deepen a previous session
+deep-research --fork-session 3                  # copy session 3 into a new session (original untouched)
+deep-research --fork-session 3 --fork-query "narrower angle on X"  # fork with a different query
+deep-research --resynthesize 3                  # re-run only synthesis on session 3's sources, save as fork
+deep-research --resynthesize 3 --style academic # same, but with a different report style
+deep-research --inspect 3                       # show metadata, sub-questions, sources, iterations, summary
+deep-research --inspect 3 --full                # also print the full detailed findings
+deep-research --inspect 3 --source 5            # deep dive on source #5 (findings + evidence quotes)
 deep-research --delete 5                        # remove a session
 ```
+
+### Flag reference
+
+| Flag                     | Values                                        | Default    | Notes                                                    |
+|--------------------------|-----------------------------------------------|------------|----------------------------------------------------------|
+| `--depth`                | `quick` \| `standard` \| `deep`               | `standard` | Controls sub-questions, results, and iteration count     |
+| `--style`                | `brief` \| `standard` \| `academic`           | `standard` | Shape and length of the final report                     |
+| `--template`             | `technology` \| `science` \| `market` \| `literature` | —    | Domain-specific prompts and defaults                     |
+| `--agent`                | —                                             | off        | Autonomous decision loop instead of fixed iterations     |
+| `--academic`             | —                                             | off        | Adds arXiv + Semantic Scholar                            |
+| `--thinking`             | —                                             | off        | Enables chain-of-thought reasoning in the GLM client     |
+| `--fresh`                | —                                             | off        | Disables cross-session URL deduplication                 |
+| `--history`              | —                                             | —          | Lists stored sessions and exits                          |
+| `--continue-session ID`  | integer                                       | —          | Resumes and deepens a prior session                      |
+| `--fork-session ID`      | integer                                       | —          | Copies a session into a new branch; original untouched   |
+| `--fork-query "..."`     | string                                        | —          | Used with `--fork-session` to set a different query      |
+| `--resynthesize ID`      | integer                                       | —          | Re-runs synthesis on stored sources; saved as a child fork |
+| `--inspect ID`           | integer                                       | —          | Prints session metadata, sources, iterations, summary    |
+| `--full`                 | —                                             | off        | With `--inspect`: also prints the full detailed findings |
+| `--source N`             | integer                                       | —          | With `--inspect`: deep dive on source #N (1-based)       |
+| `--delete ID`            | integer                                       | —          | Deletes a stored session                                 |
 
 ## Search Sources
 
@@ -197,6 +241,12 @@ src/deep_research/
     citations.py             Citation formatting + validation
   storage/
     db.py                    SQLite persistence
+
+evals/
+  benchmarks.py            Benchmark query set, tagged by subset
+  checks.py                Mechanical checks (citations, tone, structure)
+  run.py                   Benchmark runner
+  compare.py               Diff two runs, flag regressions
 ```
 
 ## Running Tests
@@ -206,6 +256,33 @@ python -m pytest tests/test_e2e.py -v
 ```
 
 Tests hit live APIs (Z.AI, Tavily, arXiv, Semantic Scholar). Tests requiring API keys are skipped automatically when keys are not set. Non-API tests (models, citations, DB, templates) always run.
+
+## Evaluation
+
+A lightweight benchmark harness lives in `evals/`. It runs a fixed set of research prompts, saves reports and mechanical checks per run, and diffs runs to catch regressions when prompts or retrieval change.
+
+```bash
+# Before a change: baseline
+python -m evals.run --tag smoke --label baseline
+
+# After a change: candidate
+python -m evals.run --tag smoke --label post-tone-fix
+
+# Diff them — exits non-zero if regressions are detected
+python -m evals.compare evals/runs/<baseline-dir> evals/runs/<candidate-dir>
+```
+
+Runs are written to `evals/runs/<timestamp>-<git-sha>[-label]/` with one directory per benchmark (report, raw JSON, checks). Benchmarks are defined in `evals/benchmarks.py` and tagged (`smoke` for fast iteration, `full` for the complete set).
+
+Mechanical checks include:
+
+- Citation density (per 100 words) and coverage (% paragraphs with `[N]`)
+- Invalid citations (refs beyond `source_count`) and orphan sources (never cited)
+- Snippet-only source ratio
+- Banned superlative/marketing phrases (regression signal for tone rules)
+- Required section presence for the report style
+
+All checks are deterministic and run locally — no extra LLM calls.
 
 ## Contributing
 

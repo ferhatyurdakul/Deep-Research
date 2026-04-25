@@ -145,7 +145,10 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")
 
     report = ResearchReport(query=query)
-    previously_known = get_known_urls()
+    if config.fresh:
+        previously_known = set()
+    else:
+        previously_known = get_known_urls()
     seen_urls: set[str] = set(previously_known)
     all_searched_queries: list[str] = []
     if previously_known:

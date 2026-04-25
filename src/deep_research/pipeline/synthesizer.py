@@ -136,10 +136,23 @@ def _get_style_prompt(
         return structure, system
 
     # STANDARD (default)
-    return _STANDARD_STRUCTURE, "You are a helpful research assistant."
+    system = (
+        "You are an analytical research writer. Write in a neutral, evidence-grounded tone. "
+        "Present findings comparatively — show where sources agree and diverge rather than flattening nuance into a single narrative. "
+        "Avoid superlatives, promotional language, and unqualified generalizations. "
+        "Let the strength of the evidence drive the confidence of your claims."
+    )
+    return _STANDARD_STRUCTURE, system
 
 
 SYNTHESIZE_PROMPT = """You are a research report writer. Given a research topic and gathered sources, write a comprehensive, well-structured research report in markdown format.
+
+TONE AND FRAMING:
+- Write as a careful analyst, not an advocate. Do not promote, endorse, or editorialize.
+- Avoid superlatives ("revolutionary", "groundbreaking", "the best") and marketing language ("game-changing", "next-generation", "cutting-edge") unless directly quoting a source — and if so, attribute the language.
+- Frame comparisons with trade-offs: instead of "X is better than Y", write "X offers [advantage] at the cost of [disadvantage], according to [N]".
+- When evidence is mixed or thin, say so directly rather than choosing a side.
+- Prefer specific, quantified claims over vague qualitative ones.
 
 {citation_rules}
 

@@ -11,7 +11,7 @@ from rich.table import Table
 
 from .config import settings
 from .logging_config import setup_logging
-from .models import ReportStyle, ResearchConfig, ResearchDepth
+from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
 from .output.report import display_report, save_report
 from .pipeline.orchestrator import arun_research, acontinue_research
 from .pipeline.agent import arun_agent_research
@@ -66,6 +66,10 @@ def parse_args() -> argparse.Namespace:
         help="Use autonomous agent mode (decides when to search more or stop)",
     )
     parser.add_argument(
+        "--fresh", action="store_true",
+        help="Ignore previously analyzed URLs (start fresh without cross-session dedup)",
+    )
+    parser.add_argument(
         "--history", action="store_true",
         help="List past research sessions",
     )
@@ -85,6 +89,22 @@ def parse_args() -> argparse.Namespace:
         "--delete", type=int, metavar="ID",
         help="Delete a research session by ID",
     )
+    parser.add_argument(
+        "--resynthesize", type=int, metavar="ID",
+        help="Re-run only the synthesis step on an existing session's sources, saved as a new fork",
+    )
+    parser.add_argument(
+        "--inspect", type=int, metavar="ID",
+        help="Show metadata, sub-questions, sources, iterations, and summary for a session",
+    )
+    parser.add_argument(
+        "--full", action="store_true",
+        help="With --inspect: also print the full detailed findings",
+    )
+    parser.add_argument(
+        "--source", type=int, metavar="N",
+        help="With --inspect: deep dive on a specific source by 1-based index",
+    )
     return parser.parse_args()
 
 
@@ -97,6 +117,8 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
         config.use_academic_search = True
     if args.template:
         config.template = args.template
+    if args.fresh:
+        config.fresh = True
     config.load_model_routes()
     return config
 
@@ -134,6 +156,141 @@ def show_history() -> None:
     )
 
 
+def _print_source_detail(report, index_1based: int) -> None:
+    if index_1based < 1 or index_1based > len(report.sources):
+        console.print(
+            f"[red]Source {index_1based} out of range. Session has {len(report.sources)} sources.[/red]"
+        )
+        sys.exit(1)
+    source = report.sources[index_1based - 1]
+    meta_lines = [
+        f"[bold]Title:[/bold]    {source.title}",
+        f"[bold]URL:[/bold]      {source.url}",
+        f"[bold]Type:[/bold]     {source.source_type.value}",
+        f"[bold]Depth:[/bold]    {source.content_depth.value}",
+    ]
+    if source.authors:
+        meta_lines.append(f"[bold]Authors:[/bold]  {', '.join(source.authors)}")
+    if source.published_date:
+        meta_lines.append(f"[bold]Date:[/bold]     {source.published_date}")
+    if source.relevance:
+        meta_lines.append(f"[bold]Relevance:[/bold] {source.relevance}")
+    console.print(Panel("\n".join(meta_lines), title=f"Source #{index_1based}", border_style="cyan"))
+
+    if source.summary:
+        console.print(Panel(source.summary, title="Summary", border_style="dim"))
+
+    if source.key_findings:
+        console.print("\n[bold]Key findings:[/bold]")
+        for f in source.key_findings:
+            console.print(f"  - {f}")
+
+    if source.key_evidence:
+        console.print("\n[bold]Key evidence (verbatim):[/bold]")
+        for e in source.key_evidence:
+            console.print(f'  "{e}"')
+
+    if source.evidenced_findings:
+        console.print("\n[bold]Evidenced findings:[/bold]")
+        for ef in source.evidenced_findings:
+            console.print(f"  - [{ef.confidence}] {ef.finding}")
+            if ef.evidence:
+                console.print(f'    evidence: "{ef.evidence}"')
+
+
+def show_session_detail(session_id: int, full: bool = False, source_index: int | None = None) -> None:
+    report = db_load(session_id)
+    if not report:
+        console.print(f"[red]Session {session_id} not found.[/red]")
+        sys.exit(1)
+
+    if source_index is not None:
+        _print_source_detail(report, source_index)
+        return
+
+    # Header
+    header_lines = [
+        f"[bold]Query:[/bold]   {report.query}",
+        f"[bold]Sources:[/bold] {len(report.sources)}    "
+        f"[bold]Iterations:[/bold] {len(report.iterations)}    "
+        f"[bold]Sub-questions:[/bold] {len(report.sub_questions)}",
+        f"[bold]Created:[/bold] {report.created_at.strftime('%Y-%m-%d %H:%M')}",
+    ]
+    if report.parent_session_id:
+        header_lines.append(f"[bold]Parent:[/bold]  session {report.parent_session_id}")
+    console.print(Panel("\n".join(header_lines), title=f"Session {session_id}", border_style="blue"))
+
+    # Sub-questions
+    if report.sub_questions:
+        console.print(
+            Panel(
+                "\n".join(f"  {i+1}. {sq.question}" for i, sq in enumerate(report.sub_questions)),
+                title="Sub-Questions",
+                border_style="cyan",
+            )
+        )
+
+    # Sources table
+    if report.sources:
+        table = Table(title=f"Sources ({len(report.sources)})")
+        table.add_column("#", style="cyan", justify="right")
+        table.add_column("Type", style="yellow")
+        table.add_column("Depth", style="dim")
+        table.add_column("Title", max_width=70)
+        table.add_column("Findings", justify="right")
+        table.add_column("Evid.", justify="right")
+        for i, src in enumerate(report.sources, 1):
+            table.add_row(
+                str(i),
+                src.source_type.value,
+                src.content_depth.value,
+                src.title[:70],
+                str(len(src.key_findings)),
+                str(len(src.key_evidence) + len(src.evidenced_findings)),
+            )
+        console.print(table)
+        console.print(
+            "[dim]Use --inspect ID --source N to see findings and evidence for source #N[/dim]"
+        )
+
+    # Iterations
+    if report.iterations:
+        lines = []
+        for it in report.iterations:
+            lines.append(
+                f"  [bold]Iter {it.iteration_number}[/bold]: "
+                f"{len(it.sources)} sources, {len(it.knowledge_gaps)} gaps"
+            )
+            for g in it.knowledge_gaps:
+                lines.append(f"      - [{g.priority}] {g.gap_description}")
+                if g.suggested_query:
+                    lines.append(f"        query: {g.suggested_query}")
+        console.print(Panel("\n".join(lines), title=f"Iterations ({len(report.iterations)})", border_style="magenta"))
+
+    # Follow-ups
+    if report.follow_up_questions:
+        console.print(
+            Panel(
+                "\n".join(f"  {i+1}. {q}" for i, q in enumerate(report.follow_up_questions)),
+                title="Suggested Follow-ups",
+                border_style="green",
+            )
+        )
+
+    # Executive summary (always)
+    if report.executive_summary:
+        console.print(Panel(report.executive_summary, title="Executive Summary", border_style="white"))
+
+    # Detailed findings only with --full
+    if full and report.detailed_findings:
+        console.print(Panel(report.detailed_findings, title="Detailed Findings", border_style="white"))
+    elif report.detailed_findings:
+        console.print(
+            f"\n[dim]Detailed findings: {len(report.detailed_findings)} chars. "
+            f"Pass --full to print, or open the saved markdown in outputs/.[/dim]"
+        )
+
+
 async def async_main(query: str, config: ResearchConfig, agent_mode: bool = False) -> None:
     console.print(f"\n[bold]Researching:[/bold] {query}")
     if agent_mode:
@@ -158,6 +315,66 @@ async def async_main(query: str, config: ResearchConfig, agent_mode: bool = Fals
     console.print(f"[green]Session ID:[/green] {session_id}\n")
 
     await followup_loop(report, config)
+
+
+async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
+    from .pipeline.synthesizer import asynthesize_report
+    from .pipeline.templates import get_template
+
+    prev = db_load(session_id)
+    if not prev:
+        console.print(f"[red]Session {session_id} not found.[/red]")
+        sys.exit(1)
+    if not prev.sources:
+        console.print(f"[red]Session {session_id} has no sources to synthesize.[/red]")
+        sys.exit(1)
+
+    tmpl = get_template(config.template) if config.template else None
+    template_guidance = tmpl.synthesis_guidance if tmpl else ""
+    system_prompt = tmpl.system_prompt if tmpl else ""
+
+    suffix = f", template={tmpl.name}" if tmpl else ""
+    console.print(f"\n[bold]Re-synthesizing session {session_id}:[/bold] {prev.query}")
+    console.print(
+        f"[dim]{len(prev.sources)} sources, {len(prev.iterations)} iterations "
+        f"-> style={config.report_style.value}{suffix}[/dim]\n"
+    )
+
+    try:
+        with console.status("[cyan]Synthesizing report from existing sources..."):
+            executive, detailed, follow_ups = await asynthesize_report(
+                prev.query,
+                prev.sub_questions,
+                prev.sources,
+                thinking=config.use_thinking,
+                model=config.models.get("synthesize"),
+                template_guidance=template_guidance,
+                system_prompt=system_prompt,
+                report_style=config.report_style,
+                iteration_count=max(1, len(prev.iterations)),
+            )
+    except Exception as e:
+        console.print(f"\n[red]Synthesis failed: {e}[/red]")
+        sys.exit(1)
+
+    new_report = ResearchReport(
+        query=prev.query,
+        sub_questions=prev.sub_questions,
+        sources=prev.sources,
+        iterations=prev.iterations,
+        searched_urls=prev.searched_urls,
+        executive_summary=executive,
+        detailed_findings=detailed,
+        follow_up_questions=follow_ups,
+        parent_session_id=session_id,
+    )
+
+    display_report(new_report)
+    path = save_report(new_report)
+    new_id = db_save(new_report, depth=config.depth.value, parent_session_id=session_id)
+    new_report.id = new_id
+    console.print(f"[green]Report saved to:[/green] {path}")
+    console.print(f"[green]New session ID:[/green] {new_id} [dim](parent: {session_id}, resynthesized)[/dim]\n")
 
 
 async def async_continue(session_id: int, config: ResearchConfig) -> None:
@@ -229,6 +446,10 @@ def main() -> None:
             console.print(f"[red]Session {args.delete} not found.[/red]")
         return
 
+    if args.inspect:
+        show_session_detail(args.inspect, full=args.full, source_index=args.source)
+        return
+
     if args.fork_session:
         new_query = args.fork_query.strip() or None
         new_id = fork_session(args.fork_session, new_query=new_query)
@@ -261,6 +482,10 @@ def main() -> None:
         if not settings.zai_api_key:
             console.print("\n[yellow]Copy .env.example to .env and add your API keys.[/yellow]")
             sys.exit(1)
+
+    if args.resynthesize:
+        asyncio.run(async_resynthesize(args.resynthesize, config))
+        return
 
     if args.continue_session:
         asyncio.run(async_continue(args.continue_session, config))
