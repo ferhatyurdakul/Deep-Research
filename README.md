@@ -36,11 +36,11 @@ That's it. Web search works out of the box with DuckDuckGo (free, no key needed)
 ### Install
 
 ```bash
-git clone https://github.com/yourusername/deep-research.git
-cd deep-research
+git clone https://github.com/ferhatyurdakul/Deep-Research.git
+cd Deep-Research
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ### Configure
@@ -250,6 +250,14 @@ evals/
 ```
 
 ## Running Tests
+
+Test dependencies (`pytest`, `pytest-asyncio`) are declared as a `dev` extra. If you installed with `pip install -e .` (no extras), add them with:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Then:
 
 ```bash
 python -m pytest tests/test_e2e.py -v
