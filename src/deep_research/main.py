@@ -27,12 +27,23 @@ console = Console()
 
 
 def check_config() -> bool:
+    from .capabilities import CapabilityViolation
+
     ok = True
-    if not settings.zai_api_key:
-        console.print("[red]Error: ZAI_API_KEY not set in .env file[/red]")
+    if not settings.active_api_key:
+        console.print(
+            f"[red]Error: {settings.active_api_key_env_name} not set in .env file "
+            f"(LLM_PROVIDER={settings.active_provider})[/red]"
+        )
         ok = False
     if not settings.tavily_api_key:
         console.print("[yellow]Warning: TAVILY_API_KEY not set — falling back to DuckDuckGo for web search[/yellow]")
+    try:
+        route = settings.validate_routes()
+        console.print(f"[dim]Route: {route}[/dim]")
+    except CapabilityViolation as e:
+        console.print(f"[red]Capability check failed: {e}[/red]")
+        ok = False
     return ok
 
 
@@ -473,13 +484,14 @@ def main() -> None:
     console.print(
         Panel(
             "[bold]Deep Research[/bold]\n"
-            f"[dim]Model: {settings.glm_model} | Search: {search_engine} | Depth: {config.depth.value}[/dim]",
+            f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
+            f"Model: {settings.active_model} | Search: {search_engine} | Depth: {config.depth.value}[/dim]",
             border_style="blue",
         )
     )
 
     if not check_config():
-        if not settings.zai_api_key:
+        if not settings.active_api_key:
             console.print("\n[yellow]Copy .env.example to .env and add your API keys.[/yellow]")
             sys.exit(1)
 

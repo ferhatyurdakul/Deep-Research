@@ -434,8 +434,17 @@ async def index():
 
 @app.get("/api/config")
 async def get_config():
+    from .capabilities import CapabilityViolation
+
+    try:
+        route = settings.validate_routes()
+    except CapabilityViolation as e:
+        route = {"error": str(e)}
     return {
-        "model": settings.glm_model,
+        "model": settings.active_model,
+        "provider": settings.active_provider,
+        "endpoint_family": settings.effective_endpoint_family,
+        "route": route,
         "default_depth": settings.default_depth,
         "depths": ["quick", "standard", "deep"],
         "styles": ["brief", "standard", "academic"],
@@ -647,10 +656,20 @@ async def ws_research(ws: WebSocket):
 
 def run():
     from .logging_config import setup_logging
+    from .capabilities import CapabilityViolation
     setup_logging()
     search_engine = "Tavily" if settings.tavily_api_key else "DuckDuckGo"
     print(f"\n  Deep Research Server")
-    print(f"  Model: {settings.glm_model} | Search: {search_engine} | http://localhost:8000\n")
+    print(
+        f"  Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
+        f"Model: {settings.active_model} | Search: {search_engine} | http://localhost:8000"
+    )
+    try:
+        route = settings.validate_routes()
+        print(f"  Route: {route}\n")
+    except CapabilityViolation as e:
+        print(f"  Capability check failed: {e}\n")
+        raise SystemExit(1)
     uvicorn.run(
         "deep_research.server:app",
         host="0.0.0.0",
