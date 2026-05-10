@@ -199,6 +199,57 @@ class Settings(BaseModel):
         except Exception:
             return self.active_endpoint_family
 
+    def model_post_init(self, __context) -> None:
+        """
+        Fill empty managed credentials from the OS keyring.
+
+        Resolution priority (highest → lowest):
+          1. Environment variable / project .env / global .env  (already in the
+             field at construction time because load_dotenv populates os.environ).
+          2. OS keyring (populated by `deep-research setup` or REPL /login).
+
+        Both options stay available so CI/scripts can override per-run and
+        keyring is the unattended default for installed CLI use.
+        """
+        from .credentials import get_credential
+        # Iterate over (field_name, keyring_key) pairs. Only fill when empty
+        # so explicit constructor args (used by tests) win.
+        pairs = (
+            ("zai_api_key",               "ZAI_API_KEY"),
+            ("opencode_api_key",          "OPENCODE_API_KEY"),
+            ("tavily_api_key",            "TAVILY_API_KEY"),
+            ("semantic_scholar_api_key",  "SEMANTIC_SCHOLAR_API_KEY"),
+        )
+        for field, key in pairs:
+            if not getattr(self, field, ""):
+                stored = get_credential(key)
+                if stored:
+                    object.__setattr__(self, field, stored)
+
+    def reload_credentials(self) -> None:
+        """
+        Re-read managed credentials from the keyring. Call after `/login` /
+        `/logout` so a running REPL session picks up the change without
+        restarting. Does not touch fields whose values came from env/.env —
+        we only refresh from the keyring source.
+        """
+        from .credentials import get_credential, MANAGED_KEY_NAMES
+        env_name_to_field = {
+            "ZAI_API_KEY": "zai_api_key",
+            "OPENCODE_API_KEY": "opencode_api_key",
+            "TAVILY_API_KEY": "tavily_api_key",
+            "SEMANTIC_SCHOLAR_API_KEY": "semantic_scholar_api_key",
+        }
+        for key in MANAGED_KEY_NAMES:
+            field = env_name_to_field.get(key)
+            if field is None:
+                continue
+            # Only overwrite from keyring if the current value isn't from env.
+            # Env values stick (highest priority); keyring fills/refreshes the rest.
+            if os.getenv(key):
+                continue
+            object.__setattr__(self, field, get_credential(key) or "")
+
     def stage_models(self) -> dict[str, str]:
         """Return non-empty per-stage env overrides only (no profile fill-in)."""
         return {

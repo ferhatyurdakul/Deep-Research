@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -449,8 +450,87 @@ async def followup_loop(report, config: ResearchConfig) -> None:
     console.print("[dim]Goodbye![/dim]")
 
 
+_SUBCOMMANDS: tuple[str, ...] = ("setup", "migrate", "login", "logout", "keys")
+
+
+def _handle_subcommand(argv: list[str]) -> bool:
+    """
+    Intercept first-positional-arg subcommands (setup / migrate / login /
+    logout / keys) before the main argparse runs. Returns True when a
+    subcommand was handled, telling main() to exit.
+    """
+    if len(argv) < 2 or argv[1] not in _SUBCOMMANDS:
+        return False
+    name, *rest = argv[1:]
+    if name == "setup":
+        from .setup_wizard import run_setup_wizard
+        run_setup_wizard()
+    elif name == "login":
+        from .setup_wizard import run_login
+        run_login(rest[0] if rest else None)
+    elif name == "logout":
+        from .setup_wizard import run_logout
+        run_logout(rest[0] if rest else None)
+    elif name == "keys":
+        from .setup_wizard import show_keys_status
+        show_keys_status()
+    elif name == "migrate":
+        _run_migrate(rest)
+    return True
+
+
+def _run_migrate(args: list[str]) -> None:
+    """Move a legacy <repo>/data/research.db into the XDG data dir."""
+    import shutil
+    from .config import DATA_DIR, DB_PATH
+
+    if args:
+        candidate = Path(args[0]).expanduser().resolve()
+    else:
+        # Try a couple of obvious places. PROJECT_ROOT under pipx-install
+        # points at the venv, so we look from cwd up.
+        candidates = [
+            Path.cwd() / "data" / "research.db",
+            Path.cwd().parent / "data" / "research.db",
+            Path.home() / "Documents" / "Projects" / "Deep-Research" / "data" / "research.db",
+        ]
+        candidate = next((p for p in candidates if p.exists()), None)
+        if candidate is None:
+            console.print(
+                "[red]Could not find a legacy research.db.[/red] "
+                "Pass an explicit path: deep-research migrate /path/to/research.db"
+            )
+            return
+
+    if not candidate.exists():
+        console.print(f"[red]No file at {candidate}.[/red]")
+        return
+    if candidate == DB_PATH:
+        console.print(f"[dim]{candidate} is already the active DB. Nothing to do.[/dim]")
+        return
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if DB_PATH.exists():
+        backup = DB_PATH.with_suffix(".db.bak")
+        console.print(f"[yellow]Backing up existing {DB_PATH} -> {backup}[/yellow]")
+        shutil.copy2(DB_PATH, backup)
+
+    shutil.copy2(candidate, DB_PATH)
+    console.print(
+        f"[green]Migrated[/green] {candidate} -> {DB_PATH}\n"
+        f"[dim]The original is untouched; delete it manually once you've confirmed.[/dim]"
+    )
+
+
 def main() -> None:
     setup_logging()
+
+    # Intercept subcommands (setup / login / logout / keys / migrate) so
+    # users get a Claude-Code-style flow without the main argparse fighting
+    # for the first positional argument.
+    if _handle_subcommand(sys.argv):
+        return
+
     args = parse_args()
 
     if args.history:
@@ -525,12 +605,22 @@ def main() -> None:
     if not check_config(quiet=is_repl_launch):
         if not settings.active_api_key:
             console.print(
-                "\n[yellow]Set your API key in either:\n"
-                "  - ./.env  (per-project, wins when present)\n"
-                "  - ~/.config/deep-research/.env  (global, used when no project .env is found)\n"
-                "Copy .env.example as a starting point.[/yellow]"
+                f"\n[yellow]No {settings.active_api_key_env_name} found in env, .env, or keyring.[/yellow]"
             )
-            sys.exit(1)
+            from rich.prompt import Confirm
+            from .setup_wizard import run_setup_wizard
+            if Confirm.ask("[bold]Run the credential setup wizard now?[/bold]", default=True):
+                run_setup_wizard()
+                settings.reload_credentials()
+                if not settings.active_api_key:
+                    console.print(f"[red]Still no {settings.active_api_key_env_name} configured. Exiting.[/red]")
+                    sys.exit(1)
+            else:
+                console.print(
+                    "[dim]Run `deep-research setup` to store credentials, or set "
+                    f"{settings.active_api_key_env_name} in your environment.[/dim]"
+                )
+                sys.exit(1)
 
     if args.resynthesize:
         asyncio.run(async_resynthesize(args.resynthesize, config))

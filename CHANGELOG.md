@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.0 — 2026-05-10
+
+### Added
+
+- **OS-native secure credential storage.** API keys are stored in the OS keyring (macOS Keychain, Linux Secret Service / GNOME Keyring / KWallet, Windows Credential Manager) instead of `.env` plaintext. Existing `.env` files keep working — keyring is checked *after* env / `.env` so CI and scripted overrides take precedence.
+- **`deep-research setup`** subcommand: interactive wizard that prompts for API keys (masked input, never echoed) and stores them in the keyring. Detects existing keys and offers to keep / overwrite / clear them.
+- **`deep-research login [KEY]`** / **`deep-research logout [KEY|all]`** / **`deep-research keys`** subcommands for single-key management.
+- **REPL slash commands** for the same: `/setup`, `/login`, `/logout`, `/keys`. The running session reloads credentials immediately after a change — no restart needed.
+- **First-run UX**: when `deep-research` is launched and no API key is found anywhere (env, `.env`, keyring), it asks "Run the credential setup wizard now?" before exiting. Press Enter and you're walked through it inline.
+- **`deep-research migrate [PATH]`** subcommand: moves a legacy `<repo>/data/research.db` to `~/.local/share/deep-research/research.db`. Backs up the destination if one exists before overwriting.
+- 13 new tests covering credential CRUD, settings keyring fallback, env-source preservation on reload, and setup-wizard error paths. Total: 158 tests.
+
+### Changed
+
+- `Settings.model_post_init` now fills empty managed-credential fields from the keyring at construction. `Settings.reload_credentials()` re-reads from the keyring without overwriting env-sourced values, so REPL `/login` / `/logout` take effect mid-session.
+- README install section documents the OS keychain story and the new subcommands as the recommended way to manage credentials.
+
+### Note
+
+This release adds `keyring` as a dependency. On Linux the default backend (`SecretService`) needs `dbus-daemon` and a desktop keyring like `gnome-keyring` or `kwallet`; for headless servers, set `KEYRING_BACKEND=keyring.backends.fail.Keyring` and supply credentials via env or `.env` instead.
+
 ## v0.2.1 — 2026-05-10
 
 ### Changed

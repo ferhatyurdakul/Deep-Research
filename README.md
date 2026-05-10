@@ -53,21 +53,31 @@ pip install -e ".[dev]"
 
 ### Configure
 
-For pipx installs, put credentials at `~/.config/deep-research/.env` so they're picked up no matter where you run from:
+The recommended way is the interactive setup wizard — keys are stored in your OS keychain, no files to edit:
 
 ```bash
-mkdir -p ~/.config/deep-research
-curl -sLo ~/.config/deep-research/.env https://raw.githubusercontent.com/ferhatyurdakul/Deep-Research/main/.env.example
-$EDITOR ~/.config/deep-research/.env
+deep-research setup
 ```
 
-For dev installs, the project-local pattern still works:
+This walks you through entering your `ZAI_API_KEY` (or `OPENCODE_API_KEY`) and optional Tavily / Semantic Scholar keys, then stores them in:
+
+- **macOS:** Keychain
+- **Linux:** Secret Service (GNOME Keyring / KWallet)
+- **Windows:** Credential Manager
+
+Other credential management commands:
 
 ```bash
-cp .env.example .env
+deep-research keys                  # show which keys are stored (never prints values)
+deep-research login                 # set just the active provider's API key
+deep-research login TAVILY_API_KEY  # set a specific key
+deep-research logout                # clear the active provider's key
+deep-research logout all            # clear every stored credential
 ```
 
-Either way, set your `ZAI_API_KEY` (or `OPENCODE_API_KEY` if using OpenCode Go). Everything else is optional. A project-local `.env` always wins over the global one when both exist.
+Inside the REPL, the same commands are available as slash commands: `/setup`, `/login`, `/logout`, `/keys`.
+
+**File-based config still works** — handy for CI, scripted overrides, or air-gapped boxes. Either set environment variables directly (`export ZAI_API_KEY=…`), or put them in `./.env` (per-project, wins when present) or `~/.config/deep-research/.env` (global fallback). The resolution order is: **env var > project `.env` > global `.env` > OS keyring**.
 
 ### Where files live
 
@@ -231,6 +241,10 @@ Anything not starting with `/` runs as a research query using the current settin
 | `/fresh` | Toggle fresh mode (skip URLs from past sessions) |
 | `/provider [zai\|opencode-go]` | Show or switch LLM provider |
 | `/route [balanced\|budget\|quality]` | Show or set route profile |
+| `/setup` | Run the credential setup wizard |
+| `/login [KEY]` | Set a single API key in the OS keyring |
+| `/logout [KEY\|all]` | Clear stored credentials |
+| `/keys` | Show which credentials are stored (never shows values) |
 | `/status` | Show current settings and resolved per-stage models |
 | `/history` | List recent research sessions |
 | `/inspect <id>` | Show a stored session's metadata + summary |

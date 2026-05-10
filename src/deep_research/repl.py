@@ -29,6 +29,12 @@ from .capabilities import CapabilityViolation, known_profiles
 from .config import settings
 from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
 from .output.report import display_report, save_report
+from .setup_wizard import (
+    run_login,
+    run_logout,
+    run_setup_wizard,
+    show_keys_status,
+)
 from .storage.db import (
     delete_session,
     list_sessions,
@@ -291,6 +297,22 @@ def _cmd_clear(state: ReplState, args: list[str]) -> None:
     console.clear()
 
 
+def _cmd_setup(state: ReplState, args: list[str]) -> None:
+    run_setup_wizard()
+
+
+def _cmd_login(state: ReplState, args: list[str]) -> None:
+    run_login(args[0] if args else None)
+
+
+def _cmd_logout(state: ReplState, args: list[str]) -> None:
+    run_logout(args[0] if args else None)
+
+
+def _cmd_keys(state: ReplState, args: list[str]) -> None:
+    show_keys_status()
+
+
 def _cmd_help(state: ReplState, args: list[str]) -> None:
     rows = [
         (cmd.name + (" " + cmd.usage if cmd.usage else ""), cmd.summary)
@@ -329,6 +351,10 @@ COMMANDS: tuple[Command, ...] = (
     Command("/continue",  _cmd_continue,  "Deepen a stored session", "<id>"),
     Command("/delete",    _cmd_delete,    "Delete a stored session", "<id>"),
     Command("/clear",     _cmd_clear,     "Clear the screen"),
+    Command("/setup",     _cmd_setup,     "Run the credential setup wizard"),
+    Command("/login",     _cmd_login,     "Set a single API key in the keyring", "[KEY_NAME]"),
+    Command("/logout",    _cmd_logout,    "Clear stored credentials", "[KEY_NAME|all]"),
+    Command("/keys",      _cmd_keys,      "Show which credentials are stored (never shows values)"),
     Command("/help",      _cmd_help,      "Show this command list", aliases=("/?",)),
     Command("/quit",      _cmd_quit,      "Exit the REPL", aliases=("/exit", "/q")),
 )
