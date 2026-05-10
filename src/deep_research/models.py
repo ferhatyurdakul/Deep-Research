@@ -67,14 +67,31 @@ class ResearchConfig(BaseModel):
         return cls(depth=depth, **presets[depth])
 
     def load_model_routes(self) -> None:
-        """Load model routing from settings (environment/.env)."""
+        """
+        Load model routing from settings.
+
+        Per-stage env vars (MODEL_DECOMPOSE etc.) win when set; the active
+        LLM_ROUTE profile fills the rest. Falls back to single-model routing
+        if the profile is unknown for the active provider — no hard fail
+        here, since validate_routes() runs separately at startup.
+        """
         from .config import settings
-        self.models = ModelRouter(
-            decompose=settings.model_decompose,
-            analyze=settings.model_analyze,
-            synthesize=settings.model_synthesize,
-            gap_analysis=settings.model_gap_analysis,
-        )
+        from .capabilities import CapabilityViolation
+        try:
+            stages = settings.effective_stage_models()
+            self.models = ModelRouter(
+                decompose=stages["decompose"],
+                analyze=stages["analyze"],
+                synthesize=stages["synthesize"],
+                gap_analysis=stages["gap_analysis"],
+            )
+        except CapabilityViolation:
+            self.models = ModelRouter(
+                decompose=settings.model_decompose,
+                analyze=settings.model_analyze,
+                synthesize=settings.model_synthesize,
+                gap_analysis=settings.model_gap_analysis,
+            )
 
 
 class SubQuestion(BaseModel):

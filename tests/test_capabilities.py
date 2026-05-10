@@ -194,7 +194,11 @@ class TestSettingsValidateRoutes:
             model_synthesize="deepseek-v4-pro",
         )
         info = s.validate_routes()
-        assert info["stage_models"] == ["kimi-k2.6", "deepseek-v4-pro"]
+        # Overrides win; the other stages are filled from the balanced profile.
+        assert info["stages"]["decompose"] == "kimi-k2.6"
+        assert info["stages"]["synthesize"] == "deepseek-v4-pro"
+        assert info["stages"]["analyze"] == "glm-5.1"  # profile fill
+        assert info["stages"]["gap_analysis"] == "glm-5.1"
 
     def test_unknown_stage_model_warns_but_ok(self, caplog):
         s = Settings(
@@ -204,5 +208,5 @@ class TestSettingsValidateRoutes:
         )
         with caplog.at_level(logging.WARNING, logger="deep_research.capabilities"):
             info = s.validate_routes()
-        assert "future-mystery-model" in info["stage_models"]
+        assert info["stages"]["analyze"] == "future-mystery-model"
         assert any("future-mystery-model" in r.message for r in caplog.records)

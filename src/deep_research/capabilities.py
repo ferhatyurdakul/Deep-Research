@@ -34,6 +34,16 @@ KNOWN_THINKING_DIALECTS: frozenset[str] = frozenset({
     "zai-extra-body", "anthropic-thinking", "none",
 })
 
+# Maturity tiers that drive what shows up in the recommended routes and
+# what gets warned about at startup. The bar is "have we exercised this
+# end-to-end against a real upstream," not "does the model exist."
+#   "production":   verified path; safe default.
+#   "experimental": code path is correct but the model has not been
+#                   exercised live from this codebase. Use at your own risk.
+#   "unsupported":  do not route to this model; entry exists only so the
+#                   registry can warn instead of silently working.
+KNOWN_TIERS: frozenset[str] = frozenset({"production", "experimental", "unsupported"})
+
 
 class ModelCapability(BaseModel):
     provider: str
@@ -49,6 +59,7 @@ class ModelCapability(BaseModel):
     # natively if it has it.
     thinking_dialect: str = "none"
     context_window: Optional[int] = None
+    tier: str = "experimental"
     notes: str = ""
 
     def supports_family(self, family: str) -> bool:
@@ -83,18 +94,21 @@ _register(ModelCapability(
     endpoint_families=frozenset({"openai"}),
     thinking_supported=True,
     thinking_dialect="zai-extra-body",
+    tier="production",
 ))
 _register(ModelCapability(
     provider="zai", model_id="glm-5.1",
     endpoint_families=frozenset({"openai"}),
     thinking_supported=True,
     thinking_dialect="zai-extra-body",
+    tier="production",
 ))
 _register(ModelCapability(
     provider="zai", model_id="glm-4.5-air",
     endpoint_families=frozenset({"openai"}),
     thinking_supported=False,
     thinking_dialect="none",
+    tier="production",
     notes="Lighter/faster GLM used for decomposition stage in some configs.",
 ))
 
@@ -104,41 +118,129 @@ _register(ModelCapability(
 # (12 models). Context windows are not published per model in the OpenCode
 # docs, so we leave context_window=None. thinking_supported is set to True
 # only where the underlying model is known to expose extended thinking.
-_OPENCODE_GO_MODELS: tuple[tuple[str, "frozenset", "Optional[bool]", str, str], ...] = (
-    # (model_id, endpoint_families, thinking_supported, thinking_dialect, notes)
+_OPENCODE_GO_MODELS: tuple[tuple[str, "frozenset", "Optional[bool]", str, str, str], ...] = (
+    # (model_id, endpoint_families, thinking_supported, thinking_dialect, tier, notes)
     # GLM on OpenCode Go proxies to Z.AI, so the Z.AI extra_body shape works.
-    ("glm-5",             _OPENAI_ONLY,    True,  "zai-extra-body",
+    # Tier: production — same code path and dialect we already use against Z.AI.
+    ("glm-5",             _OPENAI_ONLY,    True,  "zai-extra-body", "production",
         "GLM-5 family exposes extended thinking via Z.AI upstream."),
-    ("glm-5.1",           _OPENAI_ONLY,    True,  "zai-extra-body",
+    ("glm-5.1",           _OPENAI_ONLY,    True,  "zai-extra-body", "production",
         "GLM-5.1 family exposes extended thinking via Z.AI upstream."),
     # Kimi K2 / DeepSeek / MiMo / Qwen are reasoning-native — they think
     # internally without needing a specific request flag. We omit the
     # thinking payload to avoid shipping Z.AI-shaped fields they don't accept.
-    ("kimi-k2.5",         _OPENAI_ONLY,    None,  "none", ""),
-    ("kimi-k2.6",         _OPENAI_ONLY,    None,  "none", ""),
-    ("mimo-v2.5",         _OPENAI_ONLY,    None,  "none", ""),
-    ("mimo-v2.5-pro",     _OPENAI_ONLY,    None,  "none", ""),
-    ("qwen3.5-plus",      _OPENAI_ONLY,    None,  "none", ""),
-    ("qwen3.6-plus",      _OPENAI_ONLY,    None,  "none", ""),
-    ("deepseek-v4-pro",   _OPENAI_ONLY,    None,  "none", ""),
-    ("deepseek-v4-flash", _OPENAI_ONLY,    None,  "none", ""),
+    # Tier: experimental — wire format is correct but not exercised live yet.
+    ("kimi-k2.5",         _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("kimi-k2.6",         _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("mimo-v2.5",         _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("mimo-v2.5-pro",     _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("qwen3.5-plus",      _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("qwen3.6-plus",      _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("deepseek-v4-pro",   _OPENAI_ONLY,    None,  "none", "experimental", ""),
+    ("deepseek-v4-flash", _OPENAI_ONLY,    None,  "none", "experimental", ""),
     # MiniMax routes through /messages so the standard Anthropic
     # extended-thinking shape is the right payload.
-    ("minimax-m2.5",      _ANTHROPIC_ONLY, None,  "anthropic-thinking",
+    # Tier: experimental — Anthropic-compat path is wired but not exercised live.
+    ("minimax-m2.5",      _ANTHROPIC_ONLY, None,  "anthropic-thinking", "experimental",
         "Routed through OpenCode Go /messages (Anthropic-compat)."),
-    ("minimax-m2.7",      _ANTHROPIC_ONLY, None,  "anthropic-thinking",
+    ("minimax-m2.7",      _ANTHROPIC_ONLY, None,  "anthropic-thinking", "experimental",
         "Routed through OpenCode Go /messages (Anthropic-compat)."),
 )
 
-for _mid, _families, _thinking, _dialect, _notes in _OPENCODE_GO_MODELS:
+for _mid, _families, _thinking, _dialect, _tier, _notes in _OPENCODE_GO_MODELS:
     _register(ModelCapability(
         provider="opencode-go",
         model_id=_mid,
         endpoint_families=_families,
         thinking_supported=_thinking,
         thinking_dialect=_dialect,
+        tier=_tier,
         notes=_notes,
     ))
+
+
+# --- Recommended stage routes ---
+#
+# Named profiles that fill the four pipeline stages with sensible defaults.
+# Per-stage env vars (MODEL_DECOMPOSE / MODEL_ANALYZE / MODEL_SYNTHESIZE /
+# MODEL_GAP_ANALYSIS) still win when set; the profile is the fallback.
+#
+# Conservative bias: the default profile uses production-tier models only.
+# "quality" and "budget" profiles deliberately reach into experimental tier;
+# we surface that at startup so the user knows what they signed up for.
+
+PIPELINE_STAGES: tuple[str, ...] = ("decompose", "analyze", "gap_analysis", "synthesize")
+
+
+class StageRoute(BaseModel):
+    decompose: str
+    analyze: str
+    gap_analysis: str
+    synthesize: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {
+            "decompose": self.decompose,
+            "analyze": self.analyze,
+            "gap_analysis": self.gap_analysis,
+            "synthesize": self.synthesize,
+        }
+
+
+# Keyed by (provider, profile_name).
+RECOMMENDED_ROUTES: dict[tuple[str, str], StageRoute] = {
+    # Z.AI: matches the long-standing CLAUDE.md recommendation — cheap GLM
+    # for decomposition, full GLM-5.1 for analysis/gap/synthesis.
+    ("zai", "balanced"): StageRoute(
+        decompose="glm-4.5-air",
+        analyze="glm-5.1",
+        gap_analysis="glm-5.1",
+        synthesize="glm-5.1",
+    ),
+    # OpenCode Go: only the GLMs are production-tier here, so the safe
+    # default keeps every stage on glm-5.1. No model mixing, no surprises.
+    ("opencode-go", "balanced"): StageRoute(
+        decompose="glm-5.1",
+        analyze="glm-5.1",
+        gap_analysis="glm-5.1",
+        synthesize="glm-5.1",
+    ),
+    # Cheaper iterative loop with experimental models for decomposition and
+    # source analysis (high volume), keeping GLM-5.1 for the
+    # quality-sensitive gap-analysis and synthesis stages.
+    ("opencode-go", "budget"): StageRoute(
+        decompose="deepseek-v4-flash",
+        analyze="deepseek-v4-flash",
+        gap_analysis="glm-5.1",
+        synthesize="glm-5.1",
+    ),
+    # Bias toward the strongest reasoning model we have wired in for the
+    # synthesis stage; iterative stages stay on GLM-5.1.
+    ("opencode-go", "quality"): StageRoute(
+        decompose="glm-5.1",
+        analyze="glm-5.1",
+        gap_analysis="glm-5.1",
+        synthesize="deepseek-v4-pro",
+    ),
+}
+
+DEFAULT_PROFILE: str = "balanced"
+
+
+def known_profiles(provider: str) -> list[str]:
+    return sorted(name for (p, name) in RECOMMENDED_ROUTES if p == provider)
+
+
+def resolve_stage_route(provider: str, profile: str) -> StageRoute:
+    """Look up the (provider, profile) route or raise CapabilityViolation."""
+    route = RECOMMENDED_ROUTES.get((provider, profile))
+    if route is None:
+        available = known_profiles(provider) or ["(none)"]
+        raise CapabilityViolation(
+            f"No route profile {profile!r} defined for provider {provider!r}. "
+            f"Available: {', '.join(available)}"
+        )
+    return route
 
 
 # --- Public API ---
@@ -275,6 +377,7 @@ def describe_route(
         info["thinking_supported"] = cap.thinking_supported
         info["thinking_dialect"] = cap.thinking_dialect
         info["context_window"] = cap.context_window
+        info["tier"] = cap.tier
     extras = [m for m in extra_models if m]
     if extras:
         info["stage_models"] = extras

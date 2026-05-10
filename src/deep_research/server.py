@@ -444,6 +444,7 @@ async def get_config():
         "model": settings.active_model,
         "provider": settings.active_provider,
         "endpoint_family": settings.effective_endpoint_family,
+        "profile": settings.llm_route,
         "route": route,
         "default_depth": settings.default_depth,
         "depths": ["quick", "standard", "deep"],

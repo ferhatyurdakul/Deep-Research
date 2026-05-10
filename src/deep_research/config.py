@@ -50,7 +50,12 @@ class Settings(BaseModel):
     max_search_results: int = 5
     max_scrape_pages: int = 3
 
-    # Multi-model routing: override per pipeline stage (empty = use the active provider's default model)
+    # Named stage-routing profile: "balanced" (default) | "budget" | "quality"
+    # See capabilities.RECOMMENDED_ROUTES for the per-provider catalog.
+    llm_route: str = os.getenv("LLM_ROUTE", "balanced")
+
+    # Multi-model routing: override per pipeline stage. Empty = use the
+    # active profile's recommended model for that stage.
     model_decompose: str = os.getenv("MODEL_DECOMPOSE", "")
     model_analyze: str = os.getenv("MODEL_ANALYZE", "")
     model_synthesize: str = os.getenv("MODEL_SYNTHESIZE", "")
@@ -129,7 +134,7 @@ class Settings(BaseModel):
             return self.active_endpoint_family
 
     def stage_models(self) -> dict[str, str]:
-        """Return non-empty per-stage model overrides keyed by pipeline stage."""
+        """Return non-empty per-stage env overrides only (no profile fill-in)."""
         return {
             stage: model
             for stage, model in (
@@ -139,6 +144,22 @@ class Settings(BaseModel):
                 ("gap_analysis", self.model_gap_analysis),
             )
             if model
+        }
+
+    def effective_stage_models(self) -> dict[str, str]:
+        """
+        Resolve all four pipeline stages: per-stage env override wins, then
+        the active LLM_ROUTE profile fills the rest. Raises CapabilityViolation
+        if the profile is unknown for the active provider.
+        """
+        from .capabilities import resolve_stage_route
+
+        route = resolve_stage_route(self.active_provider, self.llm_route)
+        return {
+            "decompose": self.model_decompose or route.decompose,
+            "analyze": self.model_analyze or route.analyze,
+            "gap_analysis": self.model_gap_analysis or route.gap_analysis,
+            "synthesize": self.model_synthesize or route.synthesize,
         }
 
     def validate_routes(self) -> dict[str, object]:
@@ -172,13 +193,24 @@ class Settings(BaseModel):
             )
 
         validate_route(provider, self.active_model, family)
-        for stage, model_id in self.stage_models().items():
-            validate_route(provider, model_id, family)
+        # Validate every stage that will actually run (profile + overrides),
+        # not just the explicit env overrides.
+        stages = self.effective_stage_models()
+        for stage_model in stages.values():
+            # Stage models can route through their own family if it differs
+            # from the active model's (e.g. minimax-m2.7 → anthropic), so
+            # resolve their family individually before validating.
+            from .capabilities import resolve_endpoint_family
+            stage_family = resolve_endpoint_family(provider, stage_model, None)
+            validate_route(provider, stage_model, stage_family)
 
-        return describe_route(
+        info = describe_route(
             provider, self.active_model, family,
-            extra_models=self.stage_models().values(),
+            extra_models=stages.values(),
         )
+        info["profile"] = self.llm_route
+        info["stages"] = stages
+        return info
 
 
 settings = Settings()

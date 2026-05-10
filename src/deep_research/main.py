@@ -485,7 +485,8 @@ def main() -> None:
         Panel(
             "[bold]Deep Research[/bold]\n"
             f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
-            f"Model: {settings.active_model} | Search: {search_engine} | Depth: {config.depth.value}[/dim]",
+            f"Profile: {settings.llm_route} | Model: {settings.active_model} | "
+            f"Search: {search_engine} | Depth: {config.depth.value}[/dim]",
             border_style="blue",
         )
     )
