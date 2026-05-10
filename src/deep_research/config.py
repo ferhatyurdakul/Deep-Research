@@ -1,19 +1,78 @@
 from __future__ import annotations
 
+import logging
 import os
+import warnings
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-OUTPUTS_DIR.mkdir(exist_ok=True)
-DATA_DIR = PROJECT_ROOT / "data"
-DATA_DIR.mkdir(exist_ok=True)
+
+# --- .env discovery -----------------------------------------------------
+# Prefer a project-local .env (cwd or above) so dev workflow is unchanged.
+# Fall back to ~/.config/deep-research/.env so a pipx-installed CLI works
+# from any directory without exporting credentials in the shell profile.
+def _xdg_config_home() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
+
+
+def _xdg_data_home() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")))
+
+
+_dotenv_path = find_dotenv(usecwd=True)
+if _dotenv_path:
+    load_dotenv(_dotenv_path)
+else:
+    _global_env = _xdg_config_home() / "deep-research" / ".env"
+    if _global_env.exists():
+        load_dotenv(_global_env)
+
+
+# --- Filesystem paths ---------------------------------------------------
+# DATA_DIR holds the SQLite session DB. Lives under XDG_DATA_HOME by default
+# so a pipx-installed CLI doesn't lose state when the venv is rebuilt.
+# Override with DEEP_RESEARCH_DATA_DIR to keep state next to the source
+# (handy during development).
+DATA_DIR = Path(
+    os.environ.get(
+        "DEEP_RESEARCH_DATA_DIR",
+        str(_xdg_data_home() / "deep-research"),
+    )
+)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "research.db"
+
+# OUTPUTS_DIR is where saved markdown reports land. Defaults to cwd so the
+# user can `cd ~/work && deep-research "..."` and find the report next to
+# their other files. Override with DEEP_RESEARCH_OUTPUTS_DIR. The directory
+# is *not* created at import time (we don't want every CLI invocation in
+# every directory to leave an empty `outputs/` behind) — see
+# output/report.py:save_report which mkdirs on demand.
+OUTPUTS_DIR = Path(
+    os.environ.get(
+        "DEEP_RESEARCH_OUTPUTS_DIR",
+        str(Path.cwd() / "outputs"),
+    )
+)
+
+
+# --- Migration notice ---------------------------------------------------
+# v0.2.0 moved DATA_DIR from <repo>/data/ to ~/.local/share/deep-research/.
+# If the old DB exists and the new one doesn't, point users at the move
+# so they don't think their history vanished.
+_legacy_db = PROJECT_ROOT / "data" / "research.db"
+if _legacy_db.exists() and not DB_PATH.exists() and _legacy_db != DB_PATH:
+    warnings.warn(
+        f"Legacy session DB found at {_legacy_db}. v0.2.0+ stores sessions at {DB_PATH}. "
+        f"Move the file to keep your history, or set DEEP_RESEARCH_DATA_DIR={_legacy_db.parent} "
+        f"to keep using the old location.",
+        stacklevel=2,
+    )
 
 # Supported provider families and their endpoint protocols.
 # A provider family is a vendor; an endpoint family is a wire protocol.

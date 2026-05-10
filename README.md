@@ -35,6 +35,14 @@ That's it. Web search works out of the box with DuckDuckGo (free, no key needed)
 
 ### Install
 
+**Recommended: pipx** — installs `deep-research` on your global PATH so you can run it from any directory without activating a venv.
+
+```bash
+pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
+```
+
+**For development** — editable install in a venv:
+
 ```bash
 git clone https://github.com/ferhatyurdakul/Deep-Research.git
 cd Deep-Research
@@ -45,11 +53,30 @@ pip install -e ".[dev]"
 
 ### Configure
 
+For pipx installs, put credentials at `~/.config/deep-research/.env` so they're picked up no matter where you run from:
+
+```bash
+mkdir -p ~/.config/deep-research
+curl -sLo ~/.config/deep-research/.env https://raw.githubusercontent.com/ferhatyurdakul/Deep-Research/main/.env.example
+$EDITOR ~/.config/deep-research/.env
+```
+
+For dev installs, the project-local pattern still works:
+
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and set your `ZAI_API_KEY`. Everything else is optional.
+Either way, set your `ZAI_API_KEY` (or `OPENCODE_API_KEY` if using OpenCode Go). Everything else is optional. A project-local `.env` always wins over the global one when both exist.
+
+### Where files live
+
+| Path | Override env var | Purpose |
+|------|------------------|---------|
+| `~/.local/share/deep-research/research.db` | `DEEP_RESEARCH_DATA_DIR` | SQLite session store (XDG_DATA_HOME respected) |
+| `<cwd>/outputs/` | `DEEP_RESEARCH_OUTPUTS_DIR` | Markdown reports — created lazily where you run from |
+| `~/.config/deep-research/.env` | `XDG_CONFIG_HOME` respected | Global credentials fallback |
+| `~/.config/deep-research/repl_history` | — | REPL command history |
 
 ### Run
 

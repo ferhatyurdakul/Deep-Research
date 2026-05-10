@@ -524,7 +524,12 @@ def main() -> None:
 
     if not check_config(quiet=is_repl_launch):
         if not settings.active_api_key:
-            console.print("\n[yellow]Copy .env.example to .env and add your API keys.[/yellow]")
+            console.print(
+                "\n[yellow]Set your API key in either:\n"
+                "  - ./.env  (per-project, wins when present)\n"
+                "  - ~/.config/deep-research/.env  (global, used when no project .env is found)\n"
+                "Copy .env.example as a starting point.[/yellow]"
+            )
             sys.exit(1)
 
     if args.resynthesize:

@@ -102,6 +102,7 @@ def save_report(report: ResearchReport) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_{safe_name}.md"
 
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     path = OUTPUTS_DIR / filename
     path.write_text(markdown, encoding="utf-8")
     return path

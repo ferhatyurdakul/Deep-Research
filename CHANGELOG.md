@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Filesystem paths now follow XDG conventions.** The session DB moves from `<repo>/data/research.db` to `~/.local/share/deep-research/research.db` (`$XDG_DATA_HOME` respected). Saved markdown reports default to `<cwd>/outputs/` so they land next to wherever you ran the command. Both are overridable via `DEEP_RESEARCH_DATA_DIR` and `DEEP_RESEARCH_OUTPUTS_DIR`. The output dir is created lazily on first save, not at import — so `deep-research --history` from a random directory no longer leaves an empty `outputs/` behind.
+- **`.env` discovery falls back to `~/.config/deep-research/.env`.** Project-local `.env` (cwd or above) still wins; the XDG-config fallback lets pipx-installed users set credentials in one place.
+- **Migration notice**: if the legacy `<repo>/data/research.db` exists and the new XDG path doesn't, a one-line warning fires at startup pointing at the move (or you can set `DEEP_RESEARCH_DATA_DIR` to the old location).
+
+### Added
+
+- `pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git` is now the recommended install path. README documents both pipx and dev/editable workflows.
+- 7 new tests covering path resolution, env-var overrides, and lazy outputs-dir creation.
+
 ## v0.2.0 — 2026-05-10
 
 ### Added
