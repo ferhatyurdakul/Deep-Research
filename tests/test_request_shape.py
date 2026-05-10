@@ -153,3 +153,86 @@ class TestBackwardCompatZaiDefaultPath:
         kwargs = _build_openai_kwargs("p", "s", "glm-5", 0.7)
         _apply_thinking(kwargs, route)
         assert kwargs["extra_body"] == {"thinking": {"type": "enabled", "clear_thinking": True}}
+
+
+class TestEndToEndDispatchPerFamily:
+    """
+    End-to-end coverage for one working model from each supported endpoint
+    family. Each test drives chat() with a mocked client and asserts:
+      - the correct client (OpenAI vs Anthropic) is invoked
+      - the resolved route landed on the right family
+      - the upstream response is normalized to a plain string
+    """
+
+    def _patch_settings(self, model: str):
+        return (
+            patch.object(llm.settings, "llm_provider", "opencode-go"),
+            patch.object(llm.settings, "opencode_model", model),
+            patch.object(llm.settings, "opencode_api_key", "fake"),
+            patch.object(llm.settings, "llm_endpoint_family", ""),
+        )
+
+    def test_openai_family_glm_dispatches_and_returns_string(self):
+        # OpenAI-compat path: GLM via OpenCode Go → /chat/completions.
+        fake_client = MagicMock()
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=MagicMock(content="glm reply"))]
+        fake_client.chat.completions.create.return_value = fake_response
+
+        patches = self._patch_settings("glm-5.1")
+        for p in patches:
+            p.start()
+        try:
+            with patch.object(llm, "get_client", return_value=fake_client), \
+                 patch.object(llm, "get_anthropic_client") as anthro_factory:
+                result = llm.chat("hello", thinking=True)
+        finally:
+            for p in patches:
+                p.stop()
+
+        assert result == "glm reply"
+        anthro_factory.assert_not_called()
+        fake_client.chat.completions.create.assert_called_once()
+        sent = fake_client.chat.completions.create.call_args.kwargs
+        assert sent["model"] == "glm-5.1"
+        # GLM via OpenCode Go uses the Z.AI extra_body dialect.
+        assert sent["extra_body"]["thinking"]["clear_thinking"] is True
+        # Generic fields are present and shaped right.
+        assert sent["messages"][0]["role"] == "system"
+        assert sent["messages"][1]["content"] == "hello"
+
+    def test_anthropic_family_minimax_dispatches_and_normalizes_blocks(self):
+        # Anthropic-compat path: MiniMax via OpenCode Go → /messages. The SDK
+        # returns content blocks; chat() must flatten them to a string so the
+        # rest of the pipeline doesn't have to care about the wire family.
+        fake_client = MagicMock()
+        block_a = MagicMock()
+        block_a.text = "part one "
+        block_b = MagicMock()
+        block_b.text = "part two"
+        fake_response = MagicMock()
+        fake_response.content = [block_a, block_b]
+        fake_client.messages.create.return_value = fake_response
+
+        patches = self._patch_settings("minimax-m2.7")
+        for p in patches:
+            p.start()
+        try:
+            with patch.object(llm, "get_anthropic_client", return_value=fake_client), \
+                 patch.object(llm, "get_client") as openai_factory:
+                result = llm.chat("hello", thinking=True)
+        finally:
+            for p in patches:
+                p.stop()
+
+        assert result == "part one part two"
+        openai_factory.assert_not_called()
+        fake_client.messages.create.assert_called_once()
+        sent = fake_client.messages.create.call_args.kwargs
+        assert sent["model"] == "minimax-m2.7"
+        assert sent["max_tokens"] > 0
+        assert sent["system"]
+        assert sent["messages"][0]["content"] == "hello"
+        # MiniMax uses Anthropic's extended-thinking shape, not extra_body.
+        assert sent["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+        assert "extra_body" not in sent
