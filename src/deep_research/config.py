@@ -54,6 +54,13 @@ class Settings(BaseModel):
     # See capabilities.RECOMMENDED_ROUTES for the per-provider catalog.
     llm_route: str = os.getenv("LLM_ROUTE", "balanced")
 
+    # Fallback provider when the primary trips a rate-limit / subscription cap.
+    # Empty = no fallback (raise a clear error and abort the run).
+    # Setting it to another configured provider (e.g. "zai" while primary is
+    # "opencode-go") makes Deep Research swap providers for the rest of the
+    # process after a 429 is observed.
+    llm_fallback_provider: str = os.getenv("LLM_FALLBACK_PROVIDER", "")
+
     # Multi-model routing: override per pipeline stage. Empty = use the
     # active profile's recommended model for that stage.
     model_decompose: str = os.getenv("MODEL_DECOMPOSE", "")

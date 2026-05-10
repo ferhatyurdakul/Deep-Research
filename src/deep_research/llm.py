@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Optional
 
 from openai import (
     OpenAI, AsyncOpenAI,
@@ -18,6 +19,7 @@ from .capabilities import (
     validate_route,
 )
 from .config import settings
+from .usage import current_stage, get_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +70,75 @@ class UpstreamRequestError(RuntimeError):
             f"(family={endpoint_family}, thinking_dialect={dialect}): {original}"
         )
 
+
+class ProviderLimitExceeded(RuntimeError):
+    """
+    Raised when the upstream returns a rate-limit / subscription-cap error
+    that survives our retry budget AND no fallback provider is configured
+    (or the fallback also fails).
+
+    OpenCode Go's $12/5h, $30/week, $60/month dollar caps surface as 429s
+    once the cap is hit — this is the user-facing exception that names the
+    provider so the operator knows where to look (subscription dashboard
+    vs. transient throttle).
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        original: BaseException,
+        fallback_attempted: bool = False,
+    ) -> None:
+        self.provider = provider
+        self.model = model
+        self.original = original
+        self.fallback_attempted = fallback_attempted
+        suffix = " (fallback provider also exhausted)" if fallback_attempted else ""
+        super().__init__(
+            f"Provider {provider} hit a rate-limit / subscription cap on {model}{suffix}: {original}"
+        )
+
 _RETRY_KWARGS = dict(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
     retry=retry_if_exception_type(_RETRYABLE),
     before_sleep=lambda rs: logger.warning(f"LLM call failed, retrying (attempt {rs.attempt_number})..."),
 )
+
+
+# Rate-limit exceptions across both SDKs. Used to distinguish "subscription
+# cap likely hit" from generic 400-class errors.
+_RATE_LIMIT_TYPES: tuple[type[BaseException], ...] = (RateLimitError,)
+if _ANTHROPIC_AVAILABLE:
+    _RATE_LIMIT_TYPES = _RATE_LIMIT_TYPES + (_AnthropicRate,)
+
+
+def _swap_to_fallback_provider() -> bool:
+    """
+    Swap settings.llm_provider to the configured fallback for the rest of
+    the process. Idempotent: returns False if no fallback is configured, the
+    fallback equals the current provider, or the fallback lacks credentials.
+    """
+    fallback = settings.llm_fallback_provider
+    if not fallback or fallback == settings.llm_provider:
+        return False
+    original = settings.llm_provider
+    settings.llm_provider = fallback
+    if not settings.active_api_key:
+        # Fallback has no key — roll back so we don't strand the run.
+        settings.llm_provider = original
+        logger.error(
+            "Fallback provider %r has no API key configured; cannot swap from %r.",
+            fallback, original,
+        )
+        return False
+    get_tracker().record_fallback(original, fallback)
+    logger.warning(
+        "Rate limit on provider %r; switching to fallback provider %r for the rest of the run.",
+        original, fallback,
+    )
+    return True
 
 _ANTHROPIC_MAX_TOKENS = 8192
 
@@ -239,12 +304,12 @@ def _clean_json(raw: str) -> str:
 # --- Sync ---
 
 @retry(**_RETRY_KWARGS)
-def chat(
+def _chat_inner(
     prompt: str,
-    system: str = "You are a helpful research assistant.",
-    model: str | None = None,
-    temperature: float = 0.7,
-    thinking: bool = False,
+    system: str,
+    model: Optional[str],
+    temperature: float,
+    thinking: bool,
 ) -> str:
     route = _resolve_route(model, thinking)
     if route.family == "openai":
@@ -254,6 +319,7 @@ def chat(
             response = get_client().chat.completions.create(**kwargs)
         except _BAD_REQUEST_TYPES as e:
             raise UpstreamRequestError(route.provider, route.model, route.family, route.dialect, e) from e
+        get_tracker().record_call(route.provider, route.model, current_stage())
         return response.choices[0].message.content or ""
     if route.family == "anthropic":
         kwargs = _build_anthropic_kwargs(prompt, system, route.model, temperature)
@@ -262,8 +328,35 @@ def chat(
             response = get_anthropic_client().messages.create(**kwargs)
         except _BAD_REQUEST_TYPES as e:
             raise UpstreamRequestError(route.provider, route.model, route.family, route.dialect, e) from e
+        get_tracker().record_call(route.provider, route.model, current_stage())
         return _extract_anthropic_text(response)
     raise ValueError(f"Unsupported endpoint family: {route.family}")
+
+
+def chat(
+    prompt: str,
+    system: str = "You are a helpful research assistant.",
+    model: str | None = None,
+    temperature: float = 0.7,
+    thinking: bool = False,
+) -> str:
+    try:
+        return _chat_inner(prompt, system, model, temperature, thinking)
+    except _RATE_LIMIT_TYPES as e:
+        provider = settings.active_provider
+        failing_model = model or settings.active_model
+        if _swap_to_fallback_provider():
+            try:
+                # Drop the explicit model — it was the prior provider's name
+                # and may not exist on the fallback. Let the new provider's
+                # active_model + profile take over.
+                return _chat_inner(prompt, system, None, temperature, thinking)
+            except _RATE_LIMIT_TYPES as e2:
+                raise ProviderLimitExceeded(
+                    settings.active_provider, settings.active_model, e2,
+                    fallback_attempted=True,
+                ) from e2
+        raise ProviderLimitExceeded(provider, failing_model, e) from e
 
 
 def chat_json(
@@ -289,12 +382,12 @@ def chat_json(
 # --- Async ---
 
 @retry(**_RETRY_KWARGS)
-async def achat(
+async def _achat_inner(
     prompt: str,
-    system: str = "You are a helpful research assistant.",
-    model: str | None = None,
-    temperature: float = 0.7,
-    thinking: bool = False,
+    system: str,
+    model: Optional[str],
+    temperature: float,
+    thinking: bool,
 ) -> str:
     route = _resolve_route(model, thinking)
     if route.family == "openai":
@@ -304,6 +397,7 @@ async def achat(
             response = await get_async_client().chat.completions.create(**kwargs)
         except _BAD_REQUEST_TYPES as e:
             raise UpstreamRequestError(route.provider, route.model, route.family, route.dialect, e) from e
+        get_tracker().record_call(route.provider, route.model, current_stage())
         return response.choices[0].message.content or ""
     if route.family == "anthropic":
         kwargs = _build_anthropic_kwargs(prompt, system, route.model, temperature)
@@ -312,8 +406,32 @@ async def achat(
             response = await get_async_anthropic_client().messages.create(**kwargs)
         except _BAD_REQUEST_TYPES as e:
             raise UpstreamRequestError(route.provider, route.model, route.family, route.dialect, e) from e
+        get_tracker().record_call(route.provider, route.model, current_stage())
         return _extract_anthropic_text(response)
     raise ValueError(f"Unsupported endpoint family: {route.family}")
+
+
+async def achat(
+    prompt: str,
+    system: str = "You are a helpful research assistant.",
+    model: str | None = None,
+    temperature: float = 0.7,
+    thinking: bool = False,
+) -> str:
+    try:
+        return await _achat_inner(prompt, system, model, temperature, thinking)
+    except _RATE_LIMIT_TYPES as e:
+        provider = settings.active_provider
+        failing_model = model or settings.active_model
+        if _swap_to_fallback_provider():
+            try:
+                return await _achat_inner(prompt, system, None, temperature, thinking)
+            except _RATE_LIMIT_TYPES as e2:
+                raise ProviderLimitExceeded(
+                    settings.active_provider, settings.active_model, e2,
+                    fallback_attempted=True,
+                ) from e2
+        raise ProviderLimitExceeded(provider, failing_model, e) from e
 
 
 async def achat_json(

@@ -20,6 +20,7 @@ from deep_research.models import (
 )
 from deep_research.search.aggregator import SearchAggregator
 from deep_research.storage.db import get_known_urls
+from deep_research.usage import new_run_tracker, stage
 
 from .analyzer import aanalyze_source, aidentify_gaps, format_analyses
 from .decomposer import adecompose_query
@@ -134,6 +135,7 @@ async def _search_and_analyze(
 
 async def arun_research(query: str, config: ResearchConfig | None = None) -> ResearchReport:
     config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
+    tracker = new_run_tracker()
     aggregator = _build_aggregator()
 
     tmpl = get_template(config.template) if config.template else None
@@ -161,10 +163,11 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
     ) as progress:
         # Decompose
         task = progress.add_task("[cyan]Decomposing research question...", total=None)
-        report.sub_questions = await adecompose_query(
-            query, max_q=config.max_sub_questions, model=config.models.get("decompose"),
-            template_guidance=tmpl.decompose_guidance if tmpl else "",
-        )
+        async with stage("decompose"):
+            report.sub_questions = await adecompose_query(
+                query, max_q=config.max_sub_questions, model=config.models.get("decompose"),
+                template_guidance=tmpl.decompose_guidance if tmpl else "",
+            )
         progress.update(task, completed=True, description="[green]Decomposed into sub-questions")
 
         console.print(
@@ -185,11 +188,12 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
                 task = progress.add_task(
                     f"[cyan]Iteration {iteration_num}: Analyzing knowledge gaps...", total=None
                 )
-                gaps, is_sufficient = await aidentify_gaps(
-                    query, report.sub_questions, report.sources, all_searched_queries,
-                    thinking=config.use_thinking,
-                    model=config.models.get("gap_analysis"),
-                )
+                async with stage("gap_analysis"):
+                    gaps, is_sufficient = await aidentify_gaps(
+                        query, report.sub_questions, report.sources, all_searched_queries,
+                        thinking=config.use_thinking,
+                        model=config.models.get("gap_analysis"),
+                    )
                 iteration.knowledge_gaps = gaps
                 progress.update(task, completed=True, description="[green]Gap analysis complete")
 
@@ -209,9 +213,10 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
 
             all_searched_queries.extend(queries_to_search)
 
-            analyzed, snippets = await _search_and_analyze(
-                query, queries_to_search, seen_urls, config, progress, aggregator
-            )
+            async with stage("analyze"):
+                analyzed, snippets = await _search_and_analyze(
+                    query, queries_to_search, seen_urls, config, progress, aggregator
+                )
             iteration.sources = analyzed
             report.sources.extend(analyzed)
             report.sources.extend(snippets)
@@ -221,19 +226,22 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
 
         # Synthesize
         task = progress.add_task("[cyan]Synthesizing final report...", total=None)
-        executive, detailed, follow_ups = await asynthesize_report(
-            query, report.sub_questions, report.sources,
-            thinking=config.use_thinking, model=config.models.get("synthesize"),
-            template_guidance=tmpl.synthesis_guidance if tmpl else "",
-            system_prompt=tmpl.system_prompt if tmpl else "",
-            report_style=config.report_style,
-            iteration_count=len(report.iterations),
-        )
+        async with stage("synthesize"):
+            executive, detailed, follow_ups = await asynthesize_report(
+                query, report.sub_questions, report.sources,
+                thinking=config.use_thinking, model=config.models.get("synthesize"),
+                template_guidance=tmpl.synthesis_guidance if tmpl else "",
+                system_prompt=tmpl.system_prompt if tmpl else "",
+                report_style=config.report_style,
+                iteration_count=len(report.iterations),
+            )
         report.executive_summary = executive
         report.detailed_findings = detailed
         report.follow_up_questions = follow_ups
         progress.update(task, completed=True, description="[green]Report complete!")
 
+    report.usage = tracker.snapshot()
+    console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report
 
 

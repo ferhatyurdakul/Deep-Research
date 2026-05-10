@@ -491,6 +491,21 @@ def main() -> None:
         )
     )
 
+    # Heuristic warning: deep depth + agent mode on opencode-go can burn
+    # through the $12/5h cap quickly. We can't query remaining budget — the
+    # OpenCode Go usage API isn't published — so this is purely advisory.
+    if (
+        settings.active_provider == "opencode-go"
+        and config.depth == ResearchDepth.DEEP
+        and getattr(args, "agent", False)
+        and not settings.llm_fallback_provider
+    ):
+        console.print(
+            "[yellow]Warning: --depth deep + --agent on OpenCode Go can consume a "
+            "significant share of the $12/5h cap. Consider setting "
+            "LLM_FALLBACK_PROVIDER (e.g. zai) so the run can survive a 429.[/yellow]"
+        )
+
     if not check_config():
         if not settings.active_api_key:
             console.print("\n[yellow]Copy .env.example to .env and add your API keys.[/yellow]")

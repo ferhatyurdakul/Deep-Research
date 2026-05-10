@@ -190,3 +190,6 @@ class ResearchReport(BaseModel):
     detailed_findings: str = ""
     follow_up_questions: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.now)
+    # Per-run usage snapshot (call counts by stage/model + fallback events).
+    # Populated by the orchestrator at the end of arun_research.
+    usage: dict = Field(default_factory=dict)
