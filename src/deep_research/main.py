@@ -26,7 +26,13 @@ from .storage.db import (
 console = Console()
 
 
-def check_config() -> bool:
+def check_config(quiet: bool = False) -> bool:
+    """
+    Verify API keys and route capability before a one-shot run.
+
+    `quiet=True` suppresses the route dump (used when the REPL is about to
+    take over and will surface settings via /status).
+    """
     from .capabilities import CapabilityViolation
 
     ok = True
@@ -36,11 +42,12 @@ def check_config() -> bool:
             f"(LLM_PROVIDER={settings.active_provider})[/red]"
         )
         ok = False
-    if not settings.tavily_api_key:
+    if not settings.tavily_api_key and not quiet:
         console.print("[yellow]Warning: TAVILY_API_KEY not set — falling back to DuckDuckGo for web search[/yellow]")
     try:
         route = settings.validate_routes()
-        console.print(f"[dim]Route: {route}[/dim]")
+        if not quiet:
+            console.print(f"[dim]Route: {route}[/dim]")
     except CapabilityViolation as e:
         console.print(f"[red]Capability check failed: {e}[/red]")
         ok = False
@@ -480,33 +487,42 @@ def main() -> None:
 
     config = build_config(args)
 
-    search_engine = "Tavily" if settings.tavily_api_key else "DuckDuckGo"
-    console.print(
-        Panel(
-            "[bold]Deep Research[/bold]\n"
-            f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
-            f"Profile: {settings.llm_route} | Model: {settings.active_model} | "
-            f"Search: {search_engine} | Depth: {config.depth.value}[/dim]",
-            border_style="blue",
-        )
+    # If the user launched bare `deep-research`, the REPL prints its own
+    # banner — skip the one-shot Panel so we don't double up on welcome text.
+    is_repl_launch = (
+        not args.query
+        and not args.resynthesize
+        and not args.continue_session
     )
 
-    # Heuristic warning: deep depth + agent mode on opencode-go can burn
-    # through the $12/5h cap quickly. We can't query remaining budget — the
-    # OpenCode Go usage API isn't published — so this is purely advisory.
-    if (
-        settings.active_provider == "opencode-go"
-        and config.depth == ResearchDepth.DEEP
-        and getattr(args, "agent", False)
-        and not settings.llm_fallback_provider
-    ):
+    if not is_repl_launch:
+        search_engine = "Tavily" if settings.tavily_api_key else "DuckDuckGo"
         console.print(
-            "[yellow]Warning: --depth deep + --agent on OpenCode Go can consume a "
-            "significant share of the $12/5h cap. Consider setting "
-            "LLM_FALLBACK_PROVIDER (e.g. zai) so the run can survive a 429.[/yellow]"
+            Panel(
+                "[bold]Deep Research[/bold]\n"
+                f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
+                f"Profile: {settings.llm_route} | Model: {settings.active_model} | "
+                f"Search: {search_engine} | Depth: {config.depth.value}[/dim]",
+                border_style="blue",
+            )
         )
 
-    if not check_config():
+        # Heuristic warning: deep depth + agent mode on opencode-go can burn
+        # through the $12/5h cap quickly. We can't query remaining budget — the
+        # OpenCode Go usage API isn't published — so this is purely advisory.
+        if (
+            settings.active_provider == "opencode-go"
+            and config.depth == ResearchDepth.DEEP
+            and getattr(args, "agent", False)
+            and not settings.llm_fallback_provider
+        ):
+            console.print(
+                "[yellow]Warning: --depth deep + --agent on OpenCode Go can consume a "
+                "significant share of the $12/5h cap. Consider setting "
+                "LLM_FALLBACK_PROVIDER (e.g. zai) so the run can survive a 429.[/yellow]"
+            )
+
+    if not check_config(quiet=is_repl_launch):
         if not settings.active_api_key:
             console.print("\n[yellow]Copy .env.example to .env and add your API keys.[/yellow]")
             sys.exit(1)
@@ -519,10 +535,22 @@ def main() -> None:
         asyncio.run(async_continue(args.continue_session, config))
         return
 
-    if args.query:
-        query = " ".join(args.query)
-    else:
-        query = Prompt.ask("\n[bold]What would you like to research?[/bold]")
+    # No positional query and no one-shot flag → launch the interactive REPL.
+    # Direct one-shot usage like `deep-research "topic"` still skips the REPL.
+    if not args.query:
+        from .repl import ReplState, run_repl
+        run_repl(ReplState(
+            depth=ResearchDepth(args.depth),
+            style=ReportStyle(args.style),
+            template=args.template,
+            thinking=args.thinking,
+            academic=args.academic,
+            agent=args.agent,
+            fresh=args.fresh,
+        ))
+        return
+
+    query = " ".join(args.query)
 
     if not query.strip():
         console.print("[red]No query provided.[/red]")

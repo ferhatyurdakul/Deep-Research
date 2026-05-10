@@ -54,12 +54,14 @@ Open `.env` and set your `ZAI_API_KEY`. Everything else is optional.
 ### Run
 
 ```bash
-# Interactive
+# Interactive REPL (slash commands + persistent settings)
 deep-research
 
-# Direct query
+# One-shot query
 deep-research "your research question"
 ```
+
+The bare `deep-research` command launches an interactive prompt where you can type questions directly or use slash commands like `/depth deep`, `/template science`, `/agent`, `/history`, `/continue 3`. See **Interactive Mode** below for the full command list.
 
 ## CLI Reference
 
@@ -170,6 +172,48 @@ With `--agent`, the fixed iteration loop is replaced by an autonomous decision l
 - **sufficient** -- done
 
 Safety limit: 8 iterations max.
+
+## Interactive Mode
+
+Run `deep-research` with no arguments to drop into the REPL:
+
+```
+> /depth deep
+  Depth: deep
+> What are the latest advances in LLM reasoning?
+[research runs at depth=deep, report displayed]
+  Saved as session 4 -> outputs/research-2026-05-08.md
+> /history
+  4  2026-05-08  What are the latest advances in LLM reasoning?
+  3  2026-05-07  CRISPR base editing 2026
+> /continue 3
+[continues session 3 with current settings]
+> /quit
+```
+
+Anything not starting with `/` runs as a research query using the current settings. Slash commands change settings or browse history without leaving the session. Up/down arrows navigate command history; history persists in `~/.config/deep-research/repl_history`.
+
+| Command | Description |
+|---|---|
+| `/depth [quick\|standard\|deep]` | Show or set research depth |
+| `/style [brief\|standard\|academic]` | Show or set report style |
+| `/template [technology\|science\|market\|literature\|none]` | Set domain template |
+| `/thinking` | Toggle thinking mode |
+| `/academic` | Toggle academic sources (arXiv + Semantic Scholar) |
+| `/agent` | Toggle autonomous agent loop |
+| `/fresh` | Toggle fresh mode (skip URLs from past sessions) |
+| `/provider [zai\|opencode-go]` | Show or switch LLM provider |
+| `/route [balanced\|budget\|quality]` | Show or set route profile |
+| `/status` | Show current settings and resolved per-stage models |
+| `/history` | List recent research sessions |
+| `/inspect <id>` | Show a stored session's metadata + summary |
+| `/continue <id>` | Deepen a stored session with current settings |
+| `/delete <id>` | Delete a stored session (asks for confirmation) |
+| `/clear` | Clear the screen |
+| `/help` | Show command list |
+| `/quit` (`/exit`, `/q`) | Exit the REPL |
+
+One-shot CLI flags still work: `deep-research "topic"`, `deep-research --depth deep --thinking "topic"`, `deep-research --history`, `deep-research --inspect 3`, etc. — see the flag reference above.
 
 ## Multi-Model Routing
 
