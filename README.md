@@ -2,7 +2,7 @@
 
 AI research agent that iteratively searches, analyzes, and synthesizes comprehensive reports with evidence-backed citations from web and academic sources.
 
-Built on [Z.AI](https://z.ai) GLM models. Fully async. CLI + Web UI.
+Built on [Z.AI](https://z.ai) GLM and [OpenCode Go](https://opencode.ai/go) models. Fully async. CLI tool.
 
 ## What It Does
 
@@ -59,9 +59,6 @@ deep-research
 
 # Direct query
 deep-research "your research question"
-
-# Web UI
-deep-research-server
 ```
 
 ## CLI Reference
@@ -174,29 +171,6 @@ With `--agent`, the fixed iteration loop is replaced by an autonomous decision l
 
 Safety limit: 8 iterations max.
 
-## Web UI
-
-```bash
-deep-research-server    # http://localhost:8000
-```
-
-- Real-time progress via WebSocket
-- Depth, template, thinking, and agent mode toggles
-- Session history browser
-- PDF and Markdown export
-
-### API
-
-| Endpoint                      | Method   | Description                      |
-|-------------------------------|----------|----------------------------------|
-| `/api/config`                 | GET      | Model info, depths, templates    |
-| `/api/history`                | GET      | List past sessions               |
-| `/api/session/{id}`           | GET      | Full session with rendered HTML  |
-| `/api/session/{id}/markdown`  | GET      | Download as Markdown             |
-| `/api/session/{id}/pdf`       | GET      | Download as PDF                  |
-| `/api/session/{id}`           | DELETE   | Delete a session                 |
-| `/ws/research`                | WS       | Real-time research WebSocket     |
-
 ## Multi-Model Routing
 
 Route pipeline stages to different models for cost/quality tradeoffs:
@@ -215,9 +189,10 @@ Leave empty to use `GLM_MODEL` for everything.
 ```
 src/deep_research/
   main.py                  CLI entrypoint
-  server.py                FastAPI + WebSocket server
   config.py                Settings from .env
-  llm.py                   GLM client (sync + async)
+  llm.py                   LLM client (sync + async, multi-provider)
+  capabilities.py          Per-model capability registry + recommended routes
+  usage.py                 Per-run call tracker + fallback metadata
   models.py                Pydantic data models
   search/                  Multi-provider search
     base.py                  SearchProvider ABC

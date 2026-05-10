@@ -13,11 +13,6 @@ dependencies = [
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "tenacity>=8.2.0",
-    "fastapi>=0.110.0",
-    "uvicorn[standard]>=0.27.0",
-    "websockets>=12.0",
-    "markdown>=3.5",
-    "weasyprint>=60.0",
     "pymupdf>=1.24.0",
     "ddgs>=9.0.0",
 ]
@@ -30,7 +25,6 @@ dev = [
 
 [project.scripts]
 deep-research = "deep_research.main:main"
-deep-research-server = "deep_research.server:run"
 
 [build-system]
 requires = ["setuptools>=68.0"]
