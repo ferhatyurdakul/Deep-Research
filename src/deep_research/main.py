@@ -428,6 +428,9 @@ async def async_continue(session_id: int, config: ResearchConfig) -> None:
 
 
 async def followup_loop(report, config: ResearchConfig) -> None:
+    if sys.stdin is None or not sys.stdin.isatty():
+        return
+
     while True:
         followup = Prompt.ask(
             "[bold]Research a follow-up question? (enter number, new query, or 'q' to quit)[/bold]",
