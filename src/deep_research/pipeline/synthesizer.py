@@ -7,7 +7,6 @@ from deep_research.models import ReportStyle, SourceAnalysis, SourceType, SubQue
 from deep_research.output.citations import (
     clean_invalid_citations,
     replace_references_in_report,
-    validate_citations,
 )
 
 from .analyzer import format_analyses
@@ -114,20 +113,43 @@ def _build_search_methodology(
     return " ".join(parts)
 
 
+def _fill_structure(structure: str, query: str, date: str, source_count: int) -> str:
+    """Substitute the real query/date/source-count into a structure template.
+
+    The structure templates carry doubled-brace tokens ({{query}}, {{date}},
+    {{source_count}}) so they survive untouched when inserted as a *value* into
+    SYNTHESIZE_PROMPT.format(). We resolve them here with str.replace (not
+    str.format, which would choke on the templates' literal braces) so the model
+    receives the actual title/metadata values instead of literal placeholders.
+    """
+    return (
+        structure
+        .replace("{{query}}", query)
+        .replace("{{date}}", date)
+        .replace("{{source_count}}", str(source_count))
+    )
+
+
 def _get_style_prompt(
     style: ReportStyle,
     analyses: list[SourceAnalysis],
     iterations: int,
     sub_question_count: int,
+    query: str,
+    date: str,
 ) -> tuple[str, str]:
     """Return (structure_prompt, system_prompt) for the given report style."""
     methodology = _build_search_methodology(analyses, iterations, sub_question_count)
+    source_count = len(analyses)
+
+    def _resolved(structure: str) -> str:
+        return _fill_structure(structure, query, date, source_count)
 
     if style == ReportStyle.BRIEF:
-        return _BRIEF_STRUCTURE, "You are a concise research analyst. Produce a focused research brief."
+        return _resolved(_BRIEF_STRUCTURE), "You are a concise research analyst. Produce a focused research brief."
 
     if style == ReportStyle.ACADEMIC:
-        structure = _ACADEMIC_STRUCTURE.replace("{search_methodology}", methodology)
+        structure = _resolved(_ACADEMIC_STRUCTURE.replace("{search_methodology}", methodology))
         system = (
             "You are an academic researcher writing a systematic review. "
             "Use formal academic language, numbered sections, and rigorous evidence attribution. "
@@ -142,7 +164,7 @@ def _get_style_prompt(
         "Avoid superlatives, promotional language, and unqualified generalizations. "
         "Let the strength of the evidence drive the confidence of your claims."
     )
-    return _STANDARD_STRUCTURE, system
+    return _resolved(_STANDARD_STRUCTURE), system
 
 
 SYNTHESIZE_PROMPT = """You are a research report writer. Given a research topic and gathered sources, write a comprehensive, well-structured research report in markdown format.
@@ -184,9 +206,11 @@ async def asynthesize_report(
     iteration_count: int = 1,
 ) -> tuple[str, str, list[str]]:
     sq_text = "\n".join(f"- {sq.question}" for sq in sub_questions)
+    today = datetime.now().strftime("%Y-%m-%d")
 
     style_structure, style_system = _get_style_prompt(
-        report_style, analyses, iteration_count, len(sub_questions)
+        report_style, analyses, iteration_count, len(sub_questions),
+        query=query, date=today,
     )
 
     # Include uncertainty rules for standard and academic
@@ -199,7 +223,6 @@ async def asynthesize_report(
         query=query,
         sub_questions=sq_text,
         analyses=format_analyses(analyses),
-        date=datetime.now().strftime("%Y-%m-%d"),
         source_count=len(analyses),
     )
     if template_guidance:

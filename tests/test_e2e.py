@@ -277,26 +277,49 @@ class TestReportStyles:
 
     def test_style_prompt_brief(self):
         from deep_research.pipeline.synthesizer import _get_style_prompt
-        structure, system = _get_style_prompt(ReportStyle.BRIEF, [], 1, 3)
+        structure, system = _get_style_prompt(
+            ReportStyle.BRIEF, [], 1, 3, query="quantum computing", date="2026-06-07",
+        )
         assert "Research Brief" in structure
         assert "500-1000 words" in structure
+        # Placeholders must be resolved, not leaked as literal braces.
+        assert "{{query}}" not in structure
+        assert "quantum computing" in structure
 
     def test_style_prompt_academic(self):
         from deep_research.pipeline.synthesizer import _get_style_prompt
         from deep_research.models import SourceAnalysis, SourceType
         sources = [SourceAnalysis(url="https://a.com", title="A", key_findings=["f"], source_type=SourceType.WEB)]
-        structure, system = _get_style_prompt(ReportStyle.ACADEMIC, sources, 1, 3)
+        structure, system = _get_style_prompt(
+            ReportStyle.ACADEMIC, sources, 1, 3, query="quantum computing", date="2026-06-07",
+        )
         assert "Abstract" in structure
         assert "Methodology" in structure
         assert "Discussion" in structure
         assert "Limitations and Uncertainty" in structure
         assert "academic" in system.lower()
+        assert "{{date}}" not in structure
+        assert "2026-06-07" in structure
 
     def test_style_prompt_standard(self):
         from deep_research.pipeline.synthesizer import _get_style_prompt
-        structure, system = _get_style_prompt(ReportStyle.STANDARD, [], 1, 3)
+        structure, system = _get_style_prompt(
+            ReportStyle.STANDARD, [], 1, 3, query="quantum computing", date="2026-06-07",
+        )
         assert "Executive Summary" in structure
         assert "Key Findings" in structure
+        # No leftover template tokens in the structure handed to the model.
+        assert "{{query}}" not in structure
+        assert "{{source_count}}" not in structure
+
+    def test_fill_structure_resolves_all_tokens(self):
+        from deep_research.pipeline.synthesizer import _fill_structure
+        template = 'Title: "# {{query}}"\nMeta: {{date}} | sources {{source_count}}'
+        out = _fill_structure(template, query="AI safety", date="2026-06-07", source_count=12)
+        assert "{{" not in out and "}}" not in out
+        assert "AI safety" in out
+        assert "2026-06-07" in out
+        assert "12" in out
 
 
 class TestEvidenceExtraction:

@@ -250,6 +250,7 @@ async def acontinue_research(
 ) -> ResearchReport:
     """Continue a previous research session."""
     config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
+    tracker = new_run_tracker()
     aggregator = _build_aggregator()
 
     report = ResearchReport(
@@ -274,11 +275,12 @@ async def acontinue_research(
             task = progress.add_task(
                 f"[cyan]Iteration {actual_num}: Analyzing knowledge gaps...", total=None
             )
-            gaps, is_sufficient = await aidentify_gaps(
-                report.query, report.sub_questions, report.sources, all_searched_queries,
-                thinking=config.use_thinking,
-                model=config.models.get("gap_analysis"),
-            )
+            async with stage("gap_analysis"):
+                gaps, is_sufficient = await aidentify_gaps(
+                    report.query, report.sub_questions, report.sources, all_searched_queries,
+                    thinking=config.use_thinking,
+                    model=config.models.get("gap_analysis"),
+                )
             iteration.knowledge_gaps = gaps
             progress.update(task, completed=True, description="[green]Gap analysis complete")
 
@@ -297,9 +299,10 @@ async def acontinue_research(
             queries_to_search = [g.suggested_query for g in gaps]
             all_searched_queries.extend(queries_to_search)
 
-            analyzed, snippets = await _search_and_analyze(
-                report.query, queries_to_search, seen_urls, config, progress, aggregator
-            )
+            async with stage("analyze"):
+                analyzed, snippets = await _search_and_analyze(
+                    report.query, queries_to_search, seen_urls, config, progress, aggregator
+                )
             iteration.sources = analyzed
             report.sources.extend(analyzed)
             report.sources.extend(snippets)
@@ -308,17 +311,20 @@ async def acontinue_research(
         report.searched_urls = list(seen_urls)
 
         task = progress.add_task("[cyan]Synthesizing updated report...", total=None)
-        executive, detailed, follow_ups = await asynthesize_report(
-            report.query, report.sub_questions, report.sources,
-            thinking=config.use_thinking, model=config.models.get("synthesize"),
-            report_style=config.report_style,
-            iteration_count=len(report.iterations),
-        )
+        async with stage("synthesize"):
+            executive, detailed, follow_ups = await asynthesize_report(
+                report.query, report.sub_questions, report.sources,
+                thinking=config.use_thinking, model=config.models.get("synthesize"),
+                report_style=config.report_style,
+                iteration_count=len(report.iterations),
+            )
         report.executive_summary = executive
         report.detailed_findings = detailed
         report.follow_up_questions = follow_ups
         progress.update(task, completed=True, description="[green]Report complete!")
 
+    report.usage = tracker.snapshot()
+    console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report
 
 

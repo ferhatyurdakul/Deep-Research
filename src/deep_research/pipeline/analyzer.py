@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 
 from deep_research.llm import achat, achat_json
 from deep_research.models import (
@@ -13,16 +14,24 @@ from deep_research.models import (
     SubQuestion,
 )
 
-# Max concurrent LLM calls to avoid rate limits — lazily created per event loop
-_semaphore_cache: dict[int, asyncio.Semaphore] = {}
+# Max concurrent LLM calls to avoid rate limits — lazily created per event loop.
+# Keyed by the loop object (not id(loop)) via a weak map: a closed loop's entry
+# is auto-evicted when the loop is garbage-collected, and distinct loops never
+# collide the way reused id() values can. Keying by id() risked returning a
+# Semaphore bound to a dead loop (e.g. the REPL runs each query in a fresh
+# asyncio.run loop), which raises "bound to a different event loop" on use.
+_semaphore_cache: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _get_semaphore() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
-    loop_id = id(loop)
-    if loop_id not in _semaphore_cache:
-        _semaphore_cache[loop_id] = asyncio.Semaphore(5)
-    return _semaphore_cache[loop_id]
+    sem = _semaphore_cache.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(5)
+        _semaphore_cache[loop] = sem
+    return sem
 
 ANALYZE_PROMPT = """You are a research analyst. Analyze the following source material and extract key findings relevant to the research question. Each finding MUST be paired with verbatim evidence from the source.
 

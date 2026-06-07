@@ -23,4 +23,5 @@ async def adecompose_query(
     if template_guidance:
         prompt += f"\n\nDomain guidance: {template_guidance}"
     data = await achat_json(prompt, model=model)
-    return [SubQuestion(**sq) for sq in data["sub_questions"]]
+    raw = data.get("sub_questions", []) if isinstance(data, dict) else []
+    return [SubQuestion(**sq) for sq in raw if isinstance(sq, dict) and sq.get("question")]

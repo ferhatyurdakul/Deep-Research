@@ -22,6 +22,7 @@ from deep_research.models import (
 )
 from deep_research.search.aggregator import SearchAggregator
 from deep_research.storage.db import get_known_urls
+from deep_research.usage import new_run_tracker, stage
 
 from .analyzer import aanalyze_source, format_analyses
 from .decomposer import adecompose_query
@@ -176,6 +177,7 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
     # consistent across entry points. The CLI and REPL always pass an explicit
     # config built from --depth, so this only affects direct callers.
     config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
+    tracker = new_run_tracker()
     aggregator = _build_aggregator()
 
     tmpl = get_template(config.template) if config.template else None
@@ -202,11 +204,12 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
     ) as progress:
         # Decompose
         task = progress.add_task("[cyan]Agent: Decomposing research question...", total=None)
-        report.sub_questions = await adecompose_query(
-            query, max_q=config.max_sub_questions,
-            model=config.models.get("decompose"),
-            template_guidance=tmpl.decompose_guidance if tmpl else "",
-        )
+        async with stage("decompose"):
+            report.sub_questions = await adecompose_query(
+                query, max_q=config.max_sub_questions,
+                model=config.models.get("decompose"),
+                template_guidance=tmpl.decompose_guidance if tmpl else "",
+            )
         progress.update(task, completed=True, description="[green]Decomposed into sub-questions")
 
         console.print(
@@ -222,9 +225,10 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         all_searched_queries.extend(queries_to_search)
 
         task = progress.add_task("[cyan]Agent: Initial search...", total=None)
-        analyzed, snippets = await _agent_search_and_analyze(
-            query, queries_to_search, seen_urls, config, aggregator
-        )
+        async with stage("analyze"):
+            analyzed, snippets = await _agent_search_and_analyze(
+                query, queries_to_search, seen_urls, config, aggregator
+            )
         iteration = ResearchIteration(iteration_number=1, sources=analyzed)
         report.sources.extend(analyzed)
         report.sources.extend(snippets)
@@ -248,11 +252,12 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
                 iteration=iter_num,
                 max_iterations=max_iters,
             )
-            decision = await achat_json(
-                decision_prompt,
-                thinking=config.use_thinking,
-                model=config.models.get("gap_analysis"),
-            )
+            async with stage("gap_analysis"):
+                decision = await achat_json(
+                    decision_prompt,
+                    thinking=config.use_thinking,
+                    model=config.models.get("gap_analysis"),
+                )
 
             action = decision.get("action", "sufficient")
             reasoning = decision.get("reasoning", "")
@@ -294,9 +299,10 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
             all_searched_queries.extend(new_queries)
 
             task = progress.add_task(f"[cyan]Agent: {label}...", total=None)
-            analyzed, snippets = await _agent_search_and_analyze(
-                query, new_queries, seen_urls, config, aggregator
-            )
+            async with stage("analyze"):
+                analyzed, snippets = await _agent_search_and_analyze(
+                    query, new_queries, seen_urls, config, aggregator
+                )
 
             iteration = ResearchIteration(
                 iteration_number=iter_num,
@@ -318,17 +324,20 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         report.searched_urls = list(seen_urls)
 
         task = progress.add_task("[cyan]Agent: Synthesizing final report...", total=None)
-        executive, detailed, follow_ups = await asynthesize_report(
-            query, report.sub_questions, report.sources,
-            thinking=config.use_thinking, model=config.models.get("synthesize"),
-            template_guidance=tmpl.synthesis_guidance if tmpl else "",
-            system_prompt=tmpl.system_prompt if tmpl else "",
-            report_style=config.report_style,
-            iteration_count=len(report.iterations),
-        )
+        async with stage("synthesize"):
+            executive, detailed, follow_ups = await asynthesize_report(
+                query, report.sub_questions, report.sources,
+                thinking=config.use_thinking, model=config.models.get("synthesize"),
+                template_guidance=tmpl.synthesis_guidance if tmpl else "",
+                system_prompt=tmpl.system_prompt if tmpl else "",
+                report_style=config.report_style,
+                iteration_count=len(report.iterations),
+            )
         report.executive_summary = executive
         report.detailed_findings = detailed
         report.follow_up_questions = follow_ups
         progress.update(task, completed=True, description="[green]Report complete!")
 
+    report.usage = tracker.snapshot()
+    console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report
