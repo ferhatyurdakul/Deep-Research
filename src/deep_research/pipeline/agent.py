@@ -33,6 +33,28 @@ console = Console()
 
 MAX_AGENT_ITERATIONS = 8
 
+# Agent mode runs its own decision loop whose budget is intentionally decoupled
+# from the fixed-pipeline `max_iterations` (which is tuned for the non-agent loop
+# and tops out at 3). Depth still scales the budget so `quick` stays lighter than
+# `deep`, but every depth gets at least one decision cycle and the hard ceiling is
+# MAX_AGENT_ITERATIONS. The agent stops early as soon as it judges coverage
+# sufficient, so the budget is a ceiling rather than a target.
+_AGENT_ITERATION_BUDGET: dict[ResearchDepth, int] = {
+    ResearchDepth.QUICK: 3,
+    ResearchDepth.STANDARD: 5,
+    ResearchDepth.DEEP: 8,
+}
+
+
+def agent_iteration_budget(depth: ResearchDepth) -> int:
+    """Iteration ceiling for the autonomous agent loop at a given depth.
+
+    Guaranteed to be at least 2 so the decision loop (`range(2, budget + 1)`)
+    always runs at least one cycle, and never exceeds MAX_AGENT_ITERATIONS.
+    """
+    budget = _AGENT_ITERATION_BUDGET.get(depth, MAX_AGENT_ITERATIONS)
+    return max(2, min(budget, MAX_AGENT_ITERATIONS))
+
 AGENT_DECISION_PROMPT = """You are an autonomous research agent. Evaluate the current research state and decide what to do next.
 
 Original research question: {query}
@@ -168,7 +190,7 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         previously_known = get_known_urls()
     seen_urls: set[str] = set(previously_known)
     all_searched_queries: list[str] = []
-    max_iters = min(config.max_iterations, MAX_AGENT_ITERATIONS)
+    max_iters = agent_iteration_budget(config.depth)
 
     with Progress(
         SpinnerColumn(),

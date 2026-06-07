@@ -208,7 +208,7 @@ With `--agent`, the fixed iteration loop is replaced by an autonomous decision l
 - **broaden** -- missing related perspectives
 - **sufficient** -- done
 
-Safety limit: 8 iterations max.
+The agent's iteration budget is independent of the fixed-loop count and scales with `--depth` — `quick` 3, `standard` 5, `deep` 8 — capped at a hard safety limit of **8 iterations**. Every depth runs at least one decision cycle, and the agent stops early as soon as it judges coverage sufficient.
 
 ## Interactive Mode
 

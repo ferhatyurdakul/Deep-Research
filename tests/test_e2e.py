@@ -430,6 +430,44 @@ class TestModels:
         assert ReportStyle.ACADEMIC == "academic"
 
 
+class TestAgentIterationBudget:
+    """The agent loop budget is decoupled from the fixed-pipeline max_iterations."""
+
+    def test_budget_scales_with_depth(self):
+        from deep_research.pipeline.agent import agent_iteration_budget
+
+        assert agent_iteration_budget(ResearchDepth.QUICK) == 3
+        assert agent_iteration_budget(ResearchDepth.STANDARD) == 5
+        assert agent_iteration_budget(ResearchDepth.DEEP) == 8
+
+    def test_budget_never_exceeds_hard_limit(self):
+        from deep_research.pipeline.agent import (
+            MAX_AGENT_ITERATIONS,
+            agent_iteration_budget,
+        )
+
+        for depth in ResearchDepth:
+            assert agent_iteration_budget(depth) <= MAX_AGENT_ITERATIONS
+
+    def test_every_depth_runs_at_least_one_decision_cycle(self):
+        from deep_research.pipeline.agent import agent_iteration_budget
+
+        # The decision loop is range(2, budget + 1); budget >= 2 guarantees
+        # at least one cycle even at quick depth (previously zero).
+        for depth in ResearchDepth:
+            budget = agent_iteration_budget(depth)
+            assert budget >= 2
+            assert len(range(2, budget + 1)) >= 1
+
+    def test_decoupled_from_fixed_max_iterations(self):
+        from deep_research.pipeline.agent import agent_iteration_budget
+
+        # deep's fixed pipeline runs 3 iterations, but the agent gets 8.
+        deep = ResearchConfig.from_depth(ResearchDepth.DEEP)
+        assert deep.max_iterations == 3
+        assert agent_iteration_budget(deep.depth) == 8
+
+
 # --- Integration: research pipeline ---
 
 @skip_no_keys
