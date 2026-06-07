@@ -627,6 +627,11 @@ def main() -> None:
         return
 
     if args.continue_session:
+        if args.agent:
+            console.print(
+                "[yellow]Note: --agent has no effect with --continue-session; "
+                "continuation always uses the gap-analysis loop.[/yellow]"
+            )
         asyncio.run(async_continue(args.continue_session, config))
         return
 

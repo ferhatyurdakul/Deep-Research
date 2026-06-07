@@ -172,7 +172,10 @@ async def _agent_search_and_analyze(
 
 async def arun_agent_research(query: str, config: ResearchConfig | None = None) -> ResearchReport:
     """Autonomous agent research loop."""
-    config = config or ResearchConfig.from_depth(ResearchDepth.DEEP)
+    # Default matches arun_research (STANDARD) so the fallback config is
+    # consistent across entry points. The CLI and REPL always pass an explicit
+    # config built from --depth, so this only affects direct callers.
+    config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
     aggregator = _build_aggregator()
 
     tmpl = get_template(config.template) if config.template else None

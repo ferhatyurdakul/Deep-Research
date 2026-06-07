@@ -266,6 +266,11 @@ def _cmd_continue(state: ReplState, args: list[str]) -> None:
         console.print(f"  [red]Session {sid} not found.[/red]")
         return
     config = state.to_config()
+    if state.agent:
+        console.print(
+            "  [yellow]Note: agent mode has no effect on /continue; "
+            "continuation always uses the gap-analysis loop.[/yellow]"
+        )
     console.print(f"\n[bold]Continuing session {sid}:[/bold] {prev.query}")
     try:
         report = asyncio.run(acontinue_research(prev, config))

@@ -158,7 +158,7 @@ deep-research --delete 5                        # remove a session
 | `--thinking`             | —                                             | off        | Enables chain-of-thought reasoning in the GLM client     |
 | `--fresh`                | —                                             | off        | Disables cross-session URL deduplication                 |
 | `--history`              | —                                             | —          | Lists stored sessions and exits                          |
-| `--continue-session ID`  | integer                                       | —          | Resumes and deepens a prior session                      |
+| `--continue-session ID`  | integer                                       | —          | Resumes and deepens a prior session (gap-analysis loop; `--agent` is not applied) |
 | `--fork-session ID`      | integer                                       | —          | Copies a session into a new branch; original untouched   |
 | `--fork-query "..."`     | string                                        | —          | Used with `--fork-session` to set a different query      |
 | `--resynthesize ID`      | integer                                       | —          | Re-runs synthesis on stored sources; saved as a child fork |
