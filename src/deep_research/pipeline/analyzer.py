@@ -258,6 +258,23 @@ async def aidentify_gaps(
         searched_queries=searched_text,
     )
     data = await achat_json(prompt, thinking=thinking, model=model)
-    gaps = [KnowledgeGap(**g) for g in data.get("gaps", [])]
-    is_sufficient = data.get("is_sufficient", False)
+    raw_gaps = data.get("gaps", []) if isinstance(data, dict) else []
+    # Tolerant parsing: the model occasionally omits a field or returns a
+    # non-dict entry. Skip unusable gaps rather than letting a single bad item
+    # raise a ValidationError that aborts the whole run after the expensive
+    # search+analysis work has already completed.
+    gaps: list[KnowledgeGap] = []
+    for g in raw_gaps:
+        if not isinstance(g, dict):
+            continue
+        desc = (g.get("gap_description") or g.get("gap") or "").strip()
+        suggested = (g.get("suggested_query") or g.get("query") or "").strip()
+        if not desc or not suggested:
+            continue
+        gaps.append(KnowledgeGap(
+            gap_description=desc,
+            suggested_query=suggested,
+            priority=g.get("priority", "medium"),
+        ))
+    is_sufficient = bool(data.get("is_sufficient", False)) if isinstance(data, dict) else False
     return gaps, is_sufficient

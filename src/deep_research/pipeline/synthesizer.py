@@ -242,8 +242,36 @@ async def asynthesize_report(
     )
     follow_ups = followup_data.get("follow_up_questions", [])
 
-    parts = report_text.split("\n## ", 1)
-    executive = parts[0].strip()
-    detailed = ("## " + parts[1]) if len(parts) > 1 else report_text
-
+    executive, detailed = _split_report(report_text)
     return executive, detailed, follow_ups
+
+
+def _split_report(report_text: str) -> tuple[str, str]:
+    """Split synthesized markdown into (executive_summary_section, detailed_findings).
+
+    The model is asked to emit a leading H1 title and a "**Date:** …" metadata
+    line, but output/report.py regenerates those itself — so we drop them here to
+    avoid duplicated titles/metadata in the saved report. The first "## " section
+    (Executive Summary / Summary / Abstract) becomes the executive summary; every
+    section after it becomes the detailed findings.
+
+    Falls back to ("", text) when the output has no recognizable "## " section
+    structure, so the full report still renders without being duplicated.
+    """
+    lines = report_text.strip().split("\n")
+    # Drop a leading H1 title ("# ...", not "## ...") and the metadata line.
+    while lines and (
+        (lines[0].startswith("# ") and not lines[0].startswith("## "))
+        or lines[0].strip().startswith("**Date:")
+        or not lines[0].strip()
+    ):
+        lines.pop(0)
+    text = "\n".join(lines).strip()
+
+    if not text.startswith("## "):
+        return "", text
+
+    parts = text[len("## "):].split("\n## ", 1)
+    executive = ("## " + parts[0]).strip()
+    detailed = ("## " + parts[1]).strip() if len(parts) > 1 else ""
+    return executive, detailed

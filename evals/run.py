@@ -145,8 +145,8 @@ def main() -> None:
 
     setup_logging()
 
-    if not settings.zai_api_key:
-        print("ERROR: ZAI_API_KEY not set in .env")
+    if not settings.active_api_key:
+        print(f"ERROR: {settings.active_api_key_env_name} not set (LLM_PROVIDER={settings.active_provider})")
         sys.exit(1)
 
     specs = select(tag=None if args.id else args.tag, ids=args.id)
@@ -174,12 +174,13 @@ def main() -> None:
         "tag": None if args.id else args.tag,
         "ids": args.id,
         "benchmark_count": len(specs),
-        "model": settings.glm_model,
+        "provider": settings.active_provider,
+        "model": settings.active_model,
     }
     (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
     print(f"Run: {out_dir.relative_to(_ROOT)}")
-    print(f"Benchmarks: {len(specs)}  Model: {settings.glm_model}")
+    print(f"Benchmarks: {len(specs)}  Provider: {settings.active_provider}  Model: {settings.active_model}")
 
     results = asyncio.run(_run_all(specs, out_dir))
 

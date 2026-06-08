@@ -191,9 +191,19 @@ def deduplicate_results(results: list[SearchResult]) -> list[SearchResult]:
     def _maybe_replace(existing: SearchResult, candidate: SearchResult) -> None:
         """Replace existing with candidate if candidate has higher source priority."""
         if _source_type_priority(candidate.source_type) < _source_type_priority(existing.source_type):
-            idx = output.index(existing)
-            output[idx] = candidate
-            # Update all index dicts to point to new winner
+            try:
+                idx = output.index(existing)
+            except ValueError:
+                # `existing` was already evicted by an earlier replacement but a
+                # stale dict entry still points at it. Nothing to swap in-place;
+                # just refresh the index maps below so future lookups resolve.
+                idx = None
+            if idx is not None:
+                output[idx] = candidate
+            # Update all index dicts to point to new winner. Re-map the *old*
+            # URL too, so a later result matching it resolves to the live
+            # winner instead of the evicted object (which would raise above).
+            seen_urls[_normalize_url(existing.url)] = candidate
             norm = _normalize_url(candidate.url)
             seen_urls[norm] = candidate
             aid = _extract_arxiv_id(candidate) or _extract_arxiv_id(existing)
