@@ -24,4 +24,12 @@ async def adecompose_query(
         prompt += f"\n\nDomain guidance: {template_guidance}"
     data = await achat_json(prompt, model=model)
     raw = data.get("sub_questions", []) if isinstance(data, dict) else []
-    return [SubQuestion(**sq) for sq in raw if isinstance(sq, dict) and sq.get("question")]
+    sub_questions = [
+        SubQuestion(**sq) for sq in raw if isinstance(sq, dict) and sq.get("question")
+    ]
+    # Degenerate fallback: if the model returned no usable sub-questions (bad
+    # JSON, wrong shape, empty list), research the original query directly rather
+    # than proceeding with an empty plan that yields a hollow, source-less report.
+    if not sub_questions:
+        sub_questions = [SubQuestion(question=query, reasoning="Original research question (decomposition returned nothing usable).")]
+    return sub_questions

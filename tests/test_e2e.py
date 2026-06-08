@@ -453,6 +453,49 @@ class TestModels:
         assert ReportStyle.ACADEMIC == "academic"
 
 
+class TestDecomposerFallback:
+    """A malformed/empty decomposition must degrade to the raw query, not [] ."""
+
+    @pytest.mark.asyncio
+    async def test_empty_decomposition_falls_back_to_query(self, monkeypatch):
+        import deep_research.pipeline.decomposer as dec
+
+        async def _fake(*args, **kwargs):
+            return {"sub_questions": []}  # model returned nothing usable
+
+        monkeypatch.setattr(dec, "achat_json", _fake)
+        subs = await dec.adecompose_query("What is the Python GIL?", max_q=5)
+        assert len(subs) == 1
+        assert subs[0].question == "What is the Python GIL?"
+
+    @pytest.mark.asyncio
+    async def test_non_dict_payload_falls_back_to_query(self, monkeypatch):
+        import deep_research.pipeline.decomposer as dec
+
+        async def _fake(*args, **kwargs):
+            return ["not", "a", "dict"]  # wrong shape entirely
+
+        monkeypatch.setattr(dec, "achat_json", _fake)
+        subs = await dec.adecompose_query("Quantum error correction", max_q=3)
+        assert len(subs) == 1
+        assert subs[0].question == "Quantum error correction"
+
+    @pytest.mark.asyncio
+    async def test_valid_decomposition_is_unchanged(self, monkeypatch):
+        import deep_research.pipeline.decomposer as dec
+
+        async def _fake(*args, **kwargs):
+            return {"sub_questions": [
+                {"question": "Q1", "reasoning": "r1"},
+                {"question": "Q2"},
+                {"reasoning": "no question — dropped"},
+            ]}
+
+        monkeypatch.setattr(dec, "achat_json", _fake)
+        subs = await dec.adecompose_query("topic", max_q=5)
+        assert [s.question for s in subs] == ["Q1", "Q2"]
+
+
 class TestAgentIterationBudget:
     """The agent loop budget is decoupled from the fixed-pipeline max_iterations."""
 

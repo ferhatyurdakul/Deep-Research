@@ -261,7 +261,12 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
 
             action = decision.get("action", "sufficient")
             reasoning = decision.get("reasoning", "")
-            confidence = decision.get("confidence", 1.0)
+            # The model sometimes returns confidence as a string ("0.8"); coerce
+            # so the later f"{confidence:.0%}" formatting can't raise ValueError.
+            try:
+                confidence = float(decision.get("confidence", 1.0))
+            except (TypeError, ValueError):
+                confidence = 1.0
             new_queries = decision.get("queries", [])
             focus = decision.get("focus_area", "")
 

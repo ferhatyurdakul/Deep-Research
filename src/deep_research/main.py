@@ -339,6 +339,7 @@ async def async_main(query: str, config: ResearchConfig, agent_mode: bool = Fals
 async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
     from .pipeline.synthesizer import asynthesize_report
     from .pipeline.templates import get_template
+    from .usage import new_run_tracker, stage
 
     prev = db_load(session_id)
     if not prev:
@@ -359,19 +360,21 @@ async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
         f"-> style={config.report_style.value}{suffix}[/dim]\n"
     )
 
+    tracker = new_run_tracker()
     try:
         with console.status("[cyan]Synthesizing report from existing sources..."):
-            executive, detailed, follow_ups = await asynthesize_report(
-                prev.query,
-                prev.sub_questions,
-                prev.sources,
-                thinking=config.use_thinking,
-                model=config.models.get("synthesize"),
-                template_guidance=template_guidance,
-                system_prompt=system_prompt,
-                report_style=config.report_style,
-                iteration_count=max(1, len(prev.iterations)),
-            )
+            async with stage("synthesize"):
+                executive, detailed, follow_ups = await asynthesize_report(
+                    prev.query,
+                    prev.sub_questions,
+                    prev.sources,
+                    thinking=config.use_thinking,
+                    model=config.models.get("synthesize"),
+                    template_guidance=template_guidance,
+                    system_prompt=system_prompt,
+                    report_style=config.report_style,
+                    iteration_count=max(1, len(prev.iterations)),
+                )
     except Exception as e:
         console.print(f"\n[red]Synthesis failed: {e}[/red]")
         sys.exit(1)
@@ -386,7 +389,9 @@ async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
         detailed_findings=detailed,
         follow_up_questions=follow_ups,
         parent_session_id=session_id,
+        usage=tracker.snapshot(),
     )
+    console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
 
     display_report(new_report)
     path = save_report(new_report)
