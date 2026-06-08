@@ -158,7 +158,7 @@ def _cmd_provider(state: ReplState, args: list[str]) -> None:
     settings.llm_provider = val
     try:
         info = settings.validate_routes()
-    except (CapabilityViolation, ValueError, KeyError) as e:
+    except (CapabilityViolation, ValueError) as e:
         settings.llm_provider = original
         console.print(f"  [red]Cannot switch to {val!r}: {e}[/red]")
         return
@@ -174,7 +174,7 @@ def _cmd_route(state: ReplState, args: list[str]) -> None:
     settings.llm_route = args[0]
     try:
         settings.validate_routes()
-    except CapabilityViolation as e:
+    except (CapabilityViolation, ValueError) as e:
         settings.llm_route = original
         console.print(f"  [red]Cannot switch route: {e}[/red]")
         return
@@ -209,7 +209,7 @@ def _cmd_status(state: ReplState, args: list[str]) -> None:
 
 
 def _cmd_history(state: ReplState, args: list[str]) -> None:
-    sessions = list_sessions()
+    sessions = list_sessions(limit=25)
     if not sessions:
         console.print("  [dim]No research sessions found.[/dim]")
         return

@@ -25,7 +25,9 @@ class SemanticScholarProvider(SearchProvider):
         self.api_key = api_key
 
     def _headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {
+            "User-Agent": "deep-research/0.3 (https://github.com/ferhatyurdakul/Deep-Research)"
+        }
         if self.api_key:
             headers["x-api-key"] = self.api_key
         return headers
