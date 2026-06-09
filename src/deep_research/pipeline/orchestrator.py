@@ -22,19 +22,20 @@ from deep_research.search.aggregator import SearchAggregator
 from deep_research.storage.db import get_known_urls
 from deep_research.usage import new_run_tracker, stage
 
-from .analyzer import aanalyze_source, aidentify_gaps, format_analyses
+from .analyzer import aanalyze_source, aidentify_gaps, format_analyses, set_llm_concurrency
 from .decomposer import adecompose_query
-from .synthesizer import asynthesize_report
+from .synthesizer import asynthesize_report_safe
 from .templates import get_template
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 
-def _build_aggregator() -> SearchAggregator:
+def _build_aggregator(config: ResearchConfig) -> SearchAggregator:
     return SearchAggregator(
         tavily_api_key=settings.tavily_api_key,
         semantic_scholar_api_key=getattr(settings, "semantic_scholar_api_key", ""),
+        max_concurrency=config.max_search_concurrency,
     )
 
 
@@ -81,7 +82,7 @@ async def _search_and_analyze(
     # Extract content using ContentParser
     task = progress.add_task("[cyan]Extracting content...", total=None)
     async with ContentParser() as parser:
-        scraped = await parser.parse_many(new_results, max_concurrent=5)
+        scraped = await parser.parse_many(new_results, max_concurrent=config.max_search_concurrency)
     progress.update(task, completed=True, description=f"[green]Extracted {len(scraped)} pages")
 
     # Build URL → SearchResult lookup for metadata
@@ -136,7 +137,8 @@ async def _search_and_analyze(
 async def arun_research(query: str, config: ResearchConfig | None = None) -> ResearchReport:
     config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
     tracker = new_run_tracker()
-    aggregator = _build_aggregator()
+    set_llm_concurrency(config.max_llm_concurrency)
+    aggregator = _build_aggregator(config)
 
     tmpl = get_template(config.template) if config.template else None
     if tmpl:
@@ -227,7 +229,7 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
         # Synthesize
         task = progress.add_task("[cyan]Synthesizing final report...", total=None)
         async with stage("synthesize"):
-            executive, detailed, follow_ups = await asynthesize_report(
+            executive, detailed, follow_ups, ok = await asynthesize_report_safe(
                 query, report.sub_questions, report.sources,
                 thinking=config.use_thinking, model=config.models.get("synthesize"),
                 template_guidance=tmpl.synthesis_guidance if tmpl else "",
@@ -238,9 +240,17 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
         report.executive_summary = executive
         report.detailed_findings = detailed
         report.follow_up_questions = follow_ups
-        progress.update(task, completed=True, description="[green]Report complete!")
+        if ok:
+            progress.update(task, completed=True, description="[green]Report complete!")
+        else:
+            progress.update(task, completed=True, description="[yellow]Synthesis failed — sources preserved")
 
     report.usage = tracker.snapshot()
+    if not ok:
+        console.print(
+            f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
+            "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
+        )
     console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report
 
@@ -251,7 +261,8 @@ async def acontinue_research(
     """Continue a previous research session."""
     config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
     tracker = new_run_tracker()
-    aggregator = _build_aggregator()
+    set_llm_concurrency(config.max_llm_concurrency)
+    aggregator = _build_aggregator(config)
 
     report = ResearchReport(
         query=previous.query,
@@ -312,7 +323,7 @@ async def acontinue_research(
 
         task = progress.add_task("[cyan]Synthesizing updated report...", total=None)
         async with stage("synthesize"):
-            executive, detailed, follow_ups = await asynthesize_report(
+            executive, detailed, follow_ups, ok = await asynthesize_report_safe(
                 report.query, report.sub_questions, report.sources,
                 thinking=config.use_thinking, model=config.models.get("synthesize"),
                 report_style=config.report_style,
@@ -321,9 +332,17 @@ async def acontinue_research(
         report.executive_summary = executive
         report.detailed_findings = detailed
         report.follow_up_questions = follow_ups
-        progress.update(task, completed=True, description="[green]Report complete!")
+        if ok:
+            progress.update(task, completed=True, description="[green]Report complete!")
+        else:
+            progress.update(task, completed=True, description="[yellow]Synthesis failed — sources preserved")
 
     report.usage = tracker.snapshot()
+    if not ok:
+        console.print(
+            f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
+            "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
+        )
     console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import weakref
 
+from deep_research.config import settings
 from deep_research.llm import achat, achat_json
 from deep_research.models import (
     ContentDepth,
@@ -20,18 +21,39 @@ from deep_research.models import (
 # collide the way reused id() values can. Keying by id() risked returning a
 # Semaphore bound to a dead loop (e.g. the REPL runs each query in a fresh
 # asyncio.run loop), which raises "bound to a different event loop" on use.
-_semaphore_cache: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+#
+# Each cache entry is (semaphore, size) so a run that requests a different
+# concurrency (e.g. agent mode) gets a correctly-sized semaphore rather than a
+# stale one from a previous run on the same loop.
+_semaphore_cache: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[asyncio.Semaphore, int]]" = (
     weakref.WeakKeyDictionary()
 )
+
+# Desired concurrency for the current run. None = fall back to the settings
+# default. Set per-run by the orchestrator/agent via set_llm_concurrency().
+_desired_concurrency: int | None = None
+
+
+def set_llm_concurrency(n: int) -> None:
+    """Set the ceiling on concurrent analyze/summarize/extract LLM calls.
+
+    Called once at the start of a research run. The semaphore is (re)created
+    lazily at the next _get_semaphore() call, so this must run before the
+    analyze fan-out begins.
+    """
+    global _desired_concurrency
+    _desired_concurrency = max(1, int(n))
 
 
 def _get_semaphore() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
-    sem = _semaphore_cache.get(loop)
-    if sem is None:
-        sem = asyncio.Semaphore(5)
-        _semaphore_cache[loop] = sem
-    return sem
+    desired = max(1, _desired_concurrency or settings.max_llm_concurrency)
+    entry = _semaphore_cache.get(loop)
+    if entry is None or entry[1] != desired:
+        sem = asyncio.Semaphore(desired)
+        _semaphore_cache[loop] = (sem, desired)
+        return sem
+    return entry[0]
 
 ANALYZE_PROMPT = """You are a research analyst. Analyze the following source material and extract key findings relevant to the research question. Each finding MUST be paired with verbatim evidence from the source.
 
