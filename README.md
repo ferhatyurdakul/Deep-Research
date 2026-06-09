@@ -269,6 +269,64 @@ MODEL_GAP_ANALYSIS=glm-5.1        # thinking model for gap detection
 
 Leave empty to use `GLM_MODEL` for everything.
 
+## Rate Limits & Concurrency
+
+Deep/agent runs issue a lot of LLM calls in parallel (one analyze + summary chain
+per source, plus agent decision/gap calls). On rate-limited providers — notably
+Z.AI/GLM `429 Too Many Requests` — that burstiness is what trips the limiter, not
+the content. The pipeline controls it in three ways, all tunable via env:
+
+**Concurrency caps** — how many calls run at once:
+
+| Env var | Default | Effect |
+|---|:---:|---|
+| `MAX_LLM_CONCURRENCY` | `5` | Concurrent analyze/summary/extract LLM calls |
+| `AGENT_MAX_LLM_CONCURRENCY` | `3` | Gentler ceiling auto-applied in `--agent` mode (capped by the above) |
+| `MAX_SEARCH_CONCURRENCY` | `5` | Concurrent search + content-extraction HTTP requests |
+
+**Backoff** — what happens on a `429`/timeout. Calls retry with exponential
+backoff plus jitter; rate-limit errors wait ~3× longer than generic transient
+errors, and each retry logs the provider, endpoint family, model, stage, and
+attempt count:
+
+| Env var | Default | Effect |
+|---|:---:|---|
+| `LLM_MAX_RETRIES` | `5` | Attempts before giving up (then a fallback swap or `ProviderLimitExceeded`) |
+| `LLM_RETRY_BASE_SECONDS` | `2.0` | Base backoff unit |
+| `LLM_RETRY_MAX_SECONDS` | `60.0` | Per-attempt wait cap |
+
+**Run-shape budgets** — how much work a run does at all. Unset = use the
+`--depth` preset:
+
+| Env var | Effect |
+|---|---|
+| `MAX_SUB_QUESTIONS` / `MAX_SEARCH_RESULTS` / `MAX_ITERATIONS` / `MAX_SOURCES` | Override the depth preset |
+| `AGENT_BUDGET_QUICK` / `_STANDARD` / `_DEEP` | Override agent iteration budgets (capped at 8) |
+
+Set `LLM_FALLBACK_PROVIDER` (e.g. `zai` when primary is `opencode-go`, or vice
+versa) so a run that exhausts retries on one provider swaps to the other instead
+of aborting. If synthesis itself fails after sources are gathered, the run still
+saves the collected sources — re-run with `--resynthesize <id>` to retry only
+the synthesis step without repeating search/extraction.
+
+### Recommended settings: research vs coding workloads
+
+Research is bursty and long-lived; coding/agent IDE use is interactive and
+latency-sensitive. They want different knobs:
+
+| | Research (this tool) | Coding (IDE/agent) |
+|---|---|---|
+| Concurrency | `MAX_LLM_CONCURRENCY=3–5`, `AGENT_MAX_LLM_CONCURRENCY=2–3` | N/A (one call at a time) |
+| Retries | `LLM_MAX_RETRIES=5`, longer `LLM_RETRY_MAX_SECONDS` (60s) — OK to wait | Fewer retries, short waits — fail fast for the human |
+| Depth/agent | `--depth deep`/`--agent` are heavy; pair with a fallback provider | — |
+| Thinking | On for analysis/synthesis quality | Off for speed unless needed |
+
+If you're hitting GLM 429s during ad-hoc deep/agent research, start with
+`MAX_LLM_CONCURRENCY=2 AGENT_MAX_LLM_CONCURRENCY=2` and set
+`LLM_FALLBACK_PROVIDER`. If you run research alongside heavy coding traffic on
+the same key, the research run is almost certainly the burst source — cap it
+there rather than throttling your editor.
+
 ## Project Structure
 
 ```

@@ -46,7 +46,7 @@ from .pipeline.agent import arun_agent_research
 
 console = Console()
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 
 @dataclass

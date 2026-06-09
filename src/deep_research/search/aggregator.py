@@ -263,8 +263,10 @@ class SearchAggregator:
         self,
         tavily_api_key: str = "",
         semantic_scholar_api_key: str = "",
+        max_concurrency: int = 5,
     ) -> None:
         self._providers: dict[str, SearchProvider] = {}
+        self._max_concurrency = max(1, max_concurrency)
         self._init_providers(tavily_api_key, semantic_scholar_api_key)
 
     def _init_providers(
@@ -312,6 +314,11 @@ class SearchAggregator:
         has_academic = any(s in _ACADEMIC_PROVIDERS for s in active_sources)
         has_web = any(s in _WEB_PROVIDERS for s in active_sources)
 
+        # One semaphore shared across every provider's batch_search so the
+        # total concurrent search requests stay under max_concurrency, no
+        # matter how many providers × queries fan out.
+        search_sem = asyncio.Semaphore(self._max_concurrency)
+
         tasks = []
         task_names = []
         for name in active_sources:
@@ -323,7 +330,7 @@ class SearchAggregator:
             per_query = max_results_per_query
             if has_academic and has_web and name in _ACADEMIC_PROVIDERS:
                 per_query = max(max_results_per_query, max_results_per_query + 2)
-            tasks.append(provider.batch_search(queries, per_query))
+            tasks.append(provider.batch_search(queries, per_query, semaphore=search_sem))
             task_names.append(name)
 
         if not tasks:
