@@ -957,3 +957,100 @@ class TestDatabaseEnriched:
         assert len(s.evidenced_findings) == 1
         assert s.evidenced_findings[0].finding.startswith("Transformers")
         assert s.evidenced_findings[0].confidence == "supported"
+
+    def test_extracted_data_round_trips(self, tmp_path, monkeypatch):
+        test_db = tmp_path / "test_extracted.db"
+        import deep_research.config as cfg
+        import deep_research.storage.db as db_mod
+        monkeypatch.setattr(cfg, "DB_PATH", test_db)
+        monkeypatch.setattr(db_mod, "DB_PATH", test_db)
+
+        from deep_research.storage.db import init_db, save_report, load_report
+        from deep_research.models import (
+            ExtractedData, ResearchReport, SourceAnalysis,
+        )
+
+        init_db()
+        report = ResearchReport(
+            query="Extraction test",
+            sources=[SourceAnalysis(
+                url="https://example.com", title="T", key_findings=["f"], relevance="high",
+                extracted_data=ExtractedData(
+                    statistics=["42%"], entities=["Acme"], dates=["2026"], claims=["X grows"],
+                ),
+            )],
+        )
+        loaded = load_report(save_report(report))
+        assert loaded is not None
+        ed = loaded.sources[0].extracted_data
+        assert ed is not None
+        assert ed.statistics == ["42%"]
+        assert ed.entities == ["Acme"]
+        assert ed.claims == ["X grows"]
+
+
+# --- Synthesizer report splitting ---
+
+class TestReportSplit:
+    def test_split_drops_title_and_metadata(self):
+        from deep_research.pipeline.synthesizer import _split_report
+        text = (
+            "# Research Report: What is X\n"
+            "**Date:** 2026-06-08 | **Sources analyzed:** 5\n\n"
+            "## Executive Summary\nThe real summary [1].\n\n"
+            "## Key Findings\n- a point [2]\n\n"
+            "## References\n"
+        )
+        executive, detailed = _split_report(text)
+        # The leaked H1 title / metadata line must not land in the summary.
+        assert executive.startswith("## Executive Summary")
+        assert "The real summary" in executive
+        assert "# Research Report" not in executive
+        assert "**Date:**" not in executive
+        # Detailed picks up from the next section, no summary duplication.
+        assert detailed.startswith("## Key Findings")
+        assert "Executive Summary" not in detailed
+
+    def test_split_handles_missing_structure(self):
+        from deep_research.pipeline.synthesizer import _split_report
+        executive, detailed = _split_report("Just a blob of prose with no headings.")
+        assert executive == ""
+        assert "blob of prose" in detailed
+
+
+# --- Gap parsing robustness ---
+
+class TestGapParsing:
+    @pytest.mark.asyncio
+    async def test_malformed_gaps_are_skipped_not_raised(self, monkeypatch):
+        import deep_research.pipeline.analyzer as analyzer
+
+        async def fake_achat_json(*args, **kwargs):
+            return {
+                "gaps": [
+                    {"gap_description": "real gap", "suggested_query": "real query", "priority": "high"},
+                    {"gap_description": "missing query"},          # no suggested_query
+                    {"suggested_query": "missing description"},     # no gap_description
+                    "not even a dict",
+                ],
+                "is_sufficient": False,
+            }
+
+        monkeypatch.setattr(analyzer, "achat_json", fake_achat_json)
+        gaps, is_sufficient = await analyzer.aidentify_gaps("q", [], [], [])
+        assert is_sufficient is False
+        assert len(gaps) == 1
+        assert gaps[0].suggested_query == "real query"
+
+
+# --- Eval mechanical checks: grouped citations ---
+
+class TestEvalCitationChecks:
+    def test_grouped_citations_are_counted(self):
+        from evals.checks import citation_density, invalid_citations, orphan_sources
+        text = "A claim [1, 2] and another [3]."
+        assert citation_density(text)["citations"] == 3
+        assert invalid_citations(text, source_count=3)["count"] == 0
+        # [4] is out of range; grouped parsing must still flag it.
+        assert invalid_citations("ref [4, 1]", source_count=2)["invalid_refs"] == [4]
+        assert orphan_sources(text, source_count=4)["uncited_indices"] == [4]

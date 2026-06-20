@@ -40,6 +40,9 @@ class ResearchConfig(BaseModel):
     max_scrape_pages: int = 3
     max_iterations: int = 2
     max_sources: int = 30
+    # Concurrency ceilings, populated from settings by apply_limits().
+    max_llm_concurrency: int = 5
+    max_search_concurrency: int = 5
     use_thinking: bool = False
     use_academic_search: bool = False
     use_extraction: bool = False
@@ -64,7 +67,29 @@ class ResearchConfig(BaseModel):
                 use_academic_search=True, use_extraction=True,
             ),
         }
-        return cls(depth=depth, **presets[depth])
+        config = cls(depth=depth, **presets[depth])
+        config.apply_limits()
+        return config
+
+    def apply_limits(self) -> None:
+        """Overlay env-configured concurrency ceilings and shape overrides.
+
+        Concurrency is always taken from settings. The shape knobs
+        (sub-questions / results / iterations / sources) only override the
+        depth preset when explicitly set (non-zero), so the presets remain
+        the default behavior.
+        """
+        from .config import settings
+        self.max_llm_concurrency = max(1, settings.max_llm_concurrency)
+        self.max_search_concurrency = max(1, settings.max_search_concurrency)
+        if settings.max_sub_questions_override:
+            self.max_sub_questions = settings.max_sub_questions_override
+        if settings.max_search_results_override:
+            self.max_search_results = settings.max_search_results_override
+        if settings.max_iterations_override:
+            self.max_iterations = settings.max_iterations_override
+        if settings.max_sources_override:
+            self.max_sources = settings.max_sources_override
 
     def load_model_routes(self) -> None:
         """

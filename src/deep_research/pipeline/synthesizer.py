@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from deep_research.llm import achat, achat_json
@@ -10,6 +11,8 @@ from deep_research.output.citations import (
 )
 
 from .analyzer import format_analyses
+
+logger = logging.getLogger(__name__)
 
 # --- Citation rules shared across all styles ---
 
@@ -242,8 +245,64 @@ async def asynthesize_report(
     )
     follow_ups = followup_data.get("follow_up_questions", [])
 
-    parts = report_text.split("\n## ", 1)
-    executive = parts[0].strip()
-    detailed = ("## " + parts[1]) if len(parts) > 1 else report_text
-
+    executive, detailed = _split_report(report_text)
     return executive, detailed, follow_ups
+
+
+def _split_report(report_text: str) -> tuple[str, str]:
+    """Split synthesized markdown into (executive_summary_section, detailed_findings).
+
+    The model is asked to emit a leading H1 title and a "**Date:** …" metadata
+    line, but output/report.py regenerates those itself — so we drop them here to
+    avoid duplicated titles/metadata in the saved report. The first "## " section
+    (Executive Summary / Summary / Abstract) becomes the executive summary; every
+    section after it becomes the detailed findings.
+
+    Falls back to ("", text) when the output has no recognizable "## " section
+    structure, so the full report still renders without being duplicated.
+    """
+    lines = report_text.strip().split("\n")
+    # Drop a leading H1 title ("# ...", not "## ...") and the metadata line.
+    while lines and (
+        (lines[0].startswith("# ") and not lines[0].startswith("## "))
+        or lines[0].strip().startswith("**Date:")
+        or not lines[0].strip()
+    ):
+        lines.pop(0)
+    text = "\n".join(lines).strip()
+
+    if not text.startswith("## "):
+        return "", text
+
+    parts = text[len("## "):].split("\n## ", 1)
+    executive = ("## " + parts[0]).strip()
+    detailed = ("## " + parts[1]).strip() if len(parts) > 1 else ""
+    return executive, detailed
+
+
+async def asynthesize_report_safe(
+    *args, **kwargs,
+) -> tuple[str, str, list[str], bool]:
+    """Synthesis wrapper that degrades to a partial result instead of raising.
+
+    Returns (executive_summary, detailed_findings, follow_ups, ok). On failure
+    (e.g. a provider rate-limit/cap during the synthesis stage) it returns
+    ok=False with a placeholder summary that points the user at
+    `--resynthesize`, so the caller can still persist the collected sources and
+    avoid repeating all the search/extraction work.
+    """
+    try:
+        executive, detailed, follow_ups = await asynthesize_report(*args, **kwargs)
+        return executive, detailed, follow_ups, True
+    except Exception as exc:  # noqa: BLE001 — resilience path, see docstring
+        logger.error(
+            "Synthesis stage failed (%s); preserving sources for --resynthesize.", exc
+        )
+        executive = (
+            "## Synthesis incomplete\n\n"
+            f"Report synthesis failed: `{exc}`\n\n"
+            "The collected source analyses were preserved. Re-run synthesis "
+            "without repeating search/extraction using "
+            "`deep-research --resynthesize <session_id>` once the provider recovers."
+        )
+        return executive, "", [], False

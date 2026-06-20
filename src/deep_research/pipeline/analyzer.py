@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import weakref
 
+from deep_research.config import settings
 from deep_research.llm import achat, achat_json
 from deep_research.models import (
     ContentDepth,
@@ -20,18 +21,39 @@ from deep_research.models import (
 # collide the way reused id() values can. Keying by id() risked returning a
 # Semaphore bound to a dead loop (e.g. the REPL runs each query in a fresh
 # asyncio.run loop), which raises "bound to a different event loop" on use.
-_semaphore_cache: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = (
+#
+# Each cache entry is (semaphore, size) so a run that requests a different
+# concurrency (e.g. agent mode) gets a correctly-sized semaphore rather than a
+# stale one from a previous run on the same loop.
+_semaphore_cache: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[asyncio.Semaphore, int]]" = (
     weakref.WeakKeyDictionary()
 )
+
+# Desired concurrency for the current run. None = fall back to the settings
+# default. Set per-run by the orchestrator/agent via set_llm_concurrency().
+_desired_concurrency: int | None = None
+
+
+def set_llm_concurrency(n: int) -> None:
+    """Set the ceiling on concurrent analyze/summarize/extract LLM calls.
+
+    Called once at the start of a research run. The semaphore is (re)created
+    lazily at the next _get_semaphore() call, so this must run before the
+    analyze fan-out begins.
+    """
+    global _desired_concurrency
+    _desired_concurrency = max(1, int(n))
 
 
 def _get_semaphore() -> asyncio.Semaphore:
     loop = asyncio.get_running_loop()
-    sem = _semaphore_cache.get(loop)
-    if sem is None:
-        sem = asyncio.Semaphore(5)
-        _semaphore_cache[loop] = sem
-    return sem
+    desired = max(1, _desired_concurrency or settings.max_llm_concurrency)
+    entry = _semaphore_cache.get(loop)
+    if entry is None or entry[1] != desired:
+        sem = asyncio.Semaphore(desired)
+        _semaphore_cache[loop] = (sem, desired)
+        return sem
+    return entry[0]
 
 ANALYZE_PROMPT = """You are a research analyst. Analyze the following source material and extract key findings relevant to the research question. Each finding MUST be paired with verbatim evidence from the source.
 
@@ -258,6 +280,23 @@ async def aidentify_gaps(
         searched_queries=searched_text,
     )
     data = await achat_json(prompt, thinking=thinking, model=model)
-    gaps = [KnowledgeGap(**g) for g in data.get("gaps", [])]
-    is_sufficient = data.get("is_sufficient", False)
+    raw_gaps = data.get("gaps", []) if isinstance(data, dict) else []
+    # Tolerant parsing: the model occasionally omits a field or returns a
+    # non-dict entry. Skip unusable gaps rather than letting a single bad item
+    # raise a ValidationError that aborts the whole run after the expensive
+    # search+analysis work has already completed.
+    gaps: list[KnowledgeGap] = []
+    for g in raw_gaps:
+        if not isinstance(g, dict):
+            continue
+        desc = (g.get("gap_description") or g.get("gap") or "").strip()
+        suggested = (g.get("suggested_query") or g.get("query") or "").strip()
+        if not desc or not suggested:
+            continue
+        gaps.append(KnowledgeGap(
+            gap_description=desc,
+            suggested_query=suggested,
+            priority=g.get("priority", "medium"),
+        ))
+    is_sufficient = bool(data.get("is_sufficient", False)) if isinstance(data, dict) else False
     return gaps, is_sufficient

@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 ARXIV_API = "https://export.arxiv.org/api/query"
 
+# arXiv's export API rejects requests without a descriptive User-Agent.
+_HEADERS = {"User-Agent": "deep-research/0.3 (https://github.com/ferhatyurdakul/Deep-Research)"}
+
 
 def _parse_arxiv_entry(entry: ET.Element, ns: dict) -> SearchResult | None:
     title_el = entry.find("atom:title", ns)
@@ -71,7 +74,7 @@ class ArxivSearchProvider(SearchProvider):
             "sortOrder": "descending",
         }
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=15.0, headers=_HEADERS) as client:
                 response = await client.get(ARXIV_API, params=params)
                 response.raise_for_status()
 

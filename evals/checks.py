@@ -58,8 +58,21 @@ REQUIRED_SECTIONS = {
     ],
 }
 
-_CITATION_RE = re.compile(r"\[(\d+)\]")
+# Matches single ([1]) and grouped ([1, 2]) inline citations, mirroring the
+# regex the synthesizer/citations module uses so the metrics don't undercount.
+_CITATION_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 _WORD_RE = re.compile(r"\b\w+\b")
+
+
+def _citation_nums(text: str) -> list[int]:
+    """All citation numbers in `text`, expanding grouped refs like [1, 2]."""
+    nums: list[int] = []
+    for match in _CITATION_RE.finditer(text):
+        for part in match.group(1).split(","):
+            part = part.strip()
+            if part.isdigit():
+                nums.append(int(part))
+    return nums
 
 
 def _report_text(report: ResearchReport) -> str:
@@ -68,7 +81,7 @@ def _report_text(report: ResearchReport) -> str:
 
 def citation_density(text: str) -> dict[str, float]:
     """Citations per 100 words."""
-    citations = _CITATION_RE.findall(text)
+    citations = _citation_nums(text)
     word_count = len(_WORD_RE.findall(text))
     density = (len(citations) / word_count * 100) if word_count else 0.0
     return {
@@ -109,7 +122,7 @@ def citation_coverage(text: str) -> dict[str, Any]:
 
 def invalid_citations(text: str, source_count: int) -> dict[str, Any]:
     """Citations that reference [N] where N > source_count or N < 1."""
-    nums = [int(n) for n in _CITATION_RE.findall(text)]
+    nums = _citation_nums(text)
     bad = sorted({n for n in nums if n < 1 or n > source_count})
     return {
         "source_count": source_count,
@@ -120,7 +133,7 @@ def invalid_citations(text: str, source_count: int) -> dict[str, Any]:
 
 def orphan_sources(text: str, source_count: int) -> dict[str, Any]:
     """Sources (by index 1..N) that are never cited in the report body."""
-    cited = {int(n) for n in _CITATION_RE.findall(text)}
+    cited = set(_citation_nums(text))
     valid_cited = {n for n in cited if 1 <= n <= source_count}
     orphans = sorted(set(range(1, source_count + 1)) - valid_cited)
     return {

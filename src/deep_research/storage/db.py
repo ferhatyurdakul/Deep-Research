@@ -8,6 +8,7 @@ from deep_research.config import DB_PATH
 from deep_research.models import (
     ContentDepth,
     EvidencedFinding,
+    ExtractedData,
     KnowledgeGap,
     ResearchIteration,
     ResearchReport,
@@ -63,6 +64,7 @@ _MIGRATIONS = [
     "ALTER TABLE sources ADD COLUMN evidenced_findings TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE sources ADD COLUMN content_depth TEXT NOT NULL DEFAULT 'full_text'",
     "ALTER TABLE research_sessions ADD COLUMN parent_session_id INTEGER",
+    "ALTER TABLE sources ADD COLUMN extracted_data TEXT NOT NULL DEFAULT 'null'",
 ]
 
 
@@ -117,8 +119,8 @@ def save_report(
             conn.execute(
                 """INSERT INTO sources (session_id, url, title, key_findings, relevance,
                    summary, source_type, authors, published_date, extra, key_evidence,
-                   evidenced_findings, content_depth)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   evidenced_findings, content_depth, extracted_data)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source.url,
@@ -133,6 +135,7 @@ def save_report(
                     json.dumps(source.key_evidence),
                     json.dumps([ef.model_dump() for ef in source.evidenced_findings]),
                     source.content_depth.value,
+                    json.dumps(source.extracted_data.model_dump() if source.extracted_data else None),
                 ),
             )
             now = datetime.now().isoformat()
@@ -172,6 +175,11 @@ def load_report(session_id: int) -> ResearchReport | None:
                 content_depth = ContentDepth(depth_val)
             except ValueError:
                 content_depth = ContentDepth.FULL_TEXT
+            extracted_data = None
+            if "extracted_data" in keys and s["extracted_data"]:
+                ed_raw = json.loads(s["extracted_data"])
+                if ed_raw:
+                    extracted_data = ExtractedData(**ed_raw)
             sa = SourceAnalysis(
                 url=s["url"],
                 title=s["title"],
@@ -185,6 +193,7 @@ def load_report(session_id: int) -> ResearchReport | None:
                 authors=json.loads(s["authors"]) if "authors" in keys else [],
                 published_date=s["published_date"] if "published_date" in keys else "",
                 extra=json.loads(s["extra"]) if "extra" in keys else {},
+                extracted_data=extracted_data,
             )
             sources.append(sa)
 

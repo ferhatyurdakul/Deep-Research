@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Rate-limit resilience.** Provider-aware exponential backoff with jitter for `429`/timeout errors (rate limits wait ~3× longer than generic transients), and per-retry logging of provider, endpoint family, model, stage, and attempt count. Tenacity now re-raises the underlying provider error after exhausting retries so the fallback-provider swap and `ProviderLimitExceeded` paths actually fire.
+- **Concurrency knobs**: `MAX_LLM_CONCURRENCY` (analyze fan-out), `AGENT_MAX_LLM_CONCURRENCY` (gentler default auto-applied in `--agent` mode), and `MAX_SEARCH_CONCURRENCY` (shared cap on search + extraction HTTP). Search providers now honor a shared semaphore instead of opening unbounded concurrent requests.
+- **Run-shape / budget knobs**: `MAX_SUB_QUESTIONS`, `MAX_SEARCH_RESULTS`, `MAX_ITERATIONS`, `MAX_SOURCES`, `AGENT_BUDGET_QUICK/_STANDARD/_DEEP`, and `LLM_MAX_RETRIES` / `LLM_RETRY_BASE_SECONDS` / `LLM_RETRY_MAX_SECONDS`.
+- **Graceful partial results**: if synthesis fails after sources are gathered (e.g. a mid-run rate-limit), the run preserves the source analyses and saves the session instead of crashing — re-run with `--resynthesize <id>` to retry only synthesis.
+- README "Rate Limits & Concurrency" section, including recommended Z.AI/GLM settings for research vs coding workloads. New tests for backoff/jitter, retry/fallback, bounded concurrency, the partial-result path, and an offline end-to-end pipeline run.
+
+### Fixed
+
+- Synthesizer no longer leaks the report title/metadata into `executive_summary` (which duplicated headers in saved reports and showed the wrong content in `display_report`/`/inspect`).
+- `aidentify_gaps` tolerates malformed gap JSON instead of aborting the run; dedup no longer raises `ValueError` on a stale index pointer.
+- `extracted_data` now round-trips through the session DB. arXiv / Semantic Scholar requests send a User-Agent. Eval runner uses the active provider/model; eval citation checks count grouped `[1, 2]` refs. `/history` shows 25 rows; `/route` rolls back on error.
+
 ## v0.3.0 — 2026-05-10
 
 ### Added

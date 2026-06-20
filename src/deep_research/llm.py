@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from typing import Optional
 
 from openai import (
@@ -9,7 +10,7 @@ from openai import (
     APITimeoutError, APIConnectionError, RateLimitError,
     BadRequestError as _OpenAIBadRequestError,
 )
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, retry_if_exception_type
 
 from .capabilities import (
     describe_route,
@@ -99,19 +100,58 @@ class ProviderLimitExceeded(RuntimeError):
             f"Provider {provider} hit a rate-limit / subscription cap on {model}{suffix}: {original}"
         )
 
-_RETRY_KWARGS = dict(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type(_RETRYABLE),
-    before_sleep=lambda rs: logger.warning(f"LLM call failed, retrying (attempt {rs.attempt_number})..."),
-)
-
-
 # Rate-limit exceptions across both SDKs. Used to distinguish "subscription
-# cap likely hit" from generic 400-class errors.
+# cap likely hit" from generic transient errors so we can back off harder.
 _RATE_LIMIT_TYPES: tuple[type[BaseException], ...] = (RateLimitError,)
 if _ANTHROPIC_AVAILABLE:
     _RATE_LIMIT_TYPES = _RATE_LIMIT_TYPES + (_AnthropicRate,)
+
+
+_MAX_ATTEMPTS = max(1, settings.llm_max_retries)
+
+
+def _wait_strategy(retry_state) -> float:
+    """Exponential backoff with equal-jitter; longer base for rate limits.
+
+    Rate-limit (429) errors get a 3x larger base wait than generic transient
+    errors, because the provider is asking us to slow down rather than retry
+    immediately. Jitter (half fixed + half random) spreads out concurrent
+    retries so the analyze fan-out doesn't re-burst in lockstep.
+    """
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    is_rate_limited = isinstance(exc, _RATE_LIMIT_TYPES)
+    base = settings.llm_retry_base_seconds * (3.0 if is_rate_limited else 1.0)
+    exp = base * (2 ** (retry_state.attempt_number - 1))
+    capped = min(exp, settings.llm_retry_max_seconds)
+    return capped / 2 + random.uniform(0, capped / 2)
+
+
+def _log_retry(retry_state) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    is_rate_limited = isinstance(exc, _RATE_LIMIT_TYPES)
+    logger.warning(
+        "LLM %s — provider=%s family=%s model=%s stage=%s attempt=%d/%d: %s",
+        "rate-limited, backing off" if is_rate_limited else "transient error, retrying",
+        settings.active_provider,
+        settings.effective_endpoint_family,
+        settings.active_model,
+        current_stage(),
+        retry_state.attempt_number,
+        _MAX_ATTEMPTS,
+        exc,
+    )
+
+
+_RETRY_KWARGS = dict(
+    stop=stop_after_attempt(_MAX_ATTEMPTS),
+    wait=_wait_strategy,
+    retry=retry_if_exception_type(_RETRYABLE),
+    before_sleep=_log_retry,
+    # Re-raise the underlying provider exception (not tenacity's RetryError)
+    # once attempts are exhausted, so the rate-limit/fallback handling in
+    # chat()/achat() can catch _RATE_LIMIT_TYPES and react.
+    reraise=True,
+)
 
 
 def _swap_to_fallback_provider() -> bool:
@@ -352,10 +392,18 @@ def chat(
                 # active_model + profile take over.
                 return _chat_inner(prompt, system, None, temperature, thinking)
             except _RATE_LIMIT_TYPES as e2:
+                logger.error(
+                    "Rate-limited on fallback provider %s/%s (stage=%s) after %d attempts; giving up.",
+                    settings.active_provider, settings.active_model, current_stage(), _MAX_ATTEMPTS,
+                )
                 raise ProviderLimitExceeded(
                     settings.active_provider, settings.active_model, e2,
                     fallback_attempted=True,
                 ) from e2
+        logger.error(
+            "Rate-limited on %s/%s (stage=%s) after %d attempts; no usable fallback configured.",
+            provider, failing_model, current_stage(), _MAX_ATTEMPTS,
+        )
         raise ProviderLimitExceeded(provider, failing_model, e) from e
 
 
@@ -427,10 +475,18 @@ async def achat(
             try:
                 return await _achat_inner(prompt, system, None, temperature, thinking)
             except _RATE_LIMIT_TYPES as e2:
+                logger.error(
+                    "Rate-limited on fallback provider %s/%s (stage=%s) after %d attempts; giving up.",
+                    settings.active_provider, settings.active_model, current_stage(), _MAX_ATTEMPTS,
+                )
                 raise ProviderLimitExceeded(
                     settings.active_provider, settings.active_model, e2,
                     fallback_attempted=True,
                 ) from e2
+        logger.error(
+            "Rate-limited on %s/%s (stage=%s) after %d attempts; no usable fallback configured.",
+            provider, failing_model, current_stage(), _MAX_ATTEMPTS,
+        )
         raise ProviderLimitExceeded(provider, failing_model, e) from e
 
 
