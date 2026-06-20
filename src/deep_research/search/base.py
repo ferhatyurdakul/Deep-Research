@@ -19,12 +19,24 @@ class SearchProvider(ABC):
         ...
 
     async def batch_search(
-        self, queries: list[str], max_results_per_query: int = 5
+        self,
+        queries: list[str],
+        max_results_per_query: int = 5,
+        semaphore: asyncio.Semaphore | None = None,
     ) -> list[SearchResult]:
-        """Run multiple searches and flatten results."""
-        tasks = [
-            self.search(q, max_results=max_results_per_query) for q in queries
-        ]
+        """Run multiple searches and flatten results.
+
+        When `semaphore` is provided it bounds the number of concurrent
+        `search()` calls (shared across all providers by the aggregator) so a
+        wide query fan-out doesn't open dozens of simultaneous HTTP requests.
+        """
+        async def _one(q: str) -> list[SearchResult]:
+            if semaphore is None:
+                return await self.search(q, max_results=max_results_per_query)
+            async with semaphore:
+                return await self.search(q, max_results=max_results_per_query)
+
+        tasks = [_one(q) for q in queries]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
 
         results: list[SearchResult] = []

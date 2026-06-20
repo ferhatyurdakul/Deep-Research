@@ -24,9 +24,9 @@ from deep_research.search.aggregator import SearchAggregator
 from deep_research.storage.db import get_known_urls
 from deep_research.usage import new_run_tracker, stage
 
-from .analyzer import aanalyze_source, format_analyses
+from .analyzer import aanalyze_source, format_analyses, set_llm_concurrency
 from .decomposer import adecompose_query
-from .synthesizer import asynthesize_report
+from .synthesizer import asynthesize_report_safe
 from .templates import get_template
 
 logger = logging.getLogger(__name__)
@@ -50,10 +50,20 @@ _AGENT_ITERATION_BUDGET: dict[ResearchDepth, int] = {
 def agent_iteration_budget(depth: ResearchDepth) -> int:
     """Iteration ceiling for the autonomous agent loop at a given depth.
 
-    Guaranteed to be at least 2 so the decision loop (`range(2, budget + 1)`)
-    always runs at least one cycle, and never exceeds MAX_AGENT_ITERATIONS.
+    An env override (AGENT_BUDGET_QUICK / _STANDARD / _DEEP) wins when set;
+    otherwise the built-in per-depth default is used. Guaranteed to be at
+    least 2 so the decision loop (`range(2, budget + 1)`) always runs at least
+    one cycle, and never exceeds MAX_AGENT_ITERATIONS.
     """
-    budget = _AGENT_ITERATION_BUDGET.get(depth, MAX_AGENT_ITERATIONS)
+    # Read settings lazily (matching config.apply_limits / load_model_routes)
+    # so the live config.settings is observed even if it has been rebound.
+    from deep_research.config import settings
+    override = {
+        ResearchDepth.QUICK: settings.agent_budget_quick,
+        ResearchDepth.STANDARD: settings.agent_budget_standard,
+        ResearchDepth.DEEP: settings.agent_budget_deep,
+    }.get(depth, 0)
+    budget = override or _AGENT_ITERATION_BUDGET.get(depth, MAX_AGENT_ITERATIONS)
     return max(2, min(budget, MAX_AGENT_ITERATIONS))
 
 AGENT_DECISION_PROMPT = """You are an autonomous research agent. Evaluate the current research state and decide what to do next.
@@ -90,10 +100,11 @@ Respond in JSON:
 Be critical. Only choose "sufficient" when findings truly cover the question comprehensively with multiple corroborating sources."""
 
 
-def _build_aggregator() -> SearchAggregator:
+def _build_aggregator(config: ResearchConfig) -> SearchAggregator:
     return SearchAggregator(
         tavily_api_key=settings.tavily_api_key,
         semantic_scholar_api_key=getattr(settings, "semantic_scholar_api_key", ""),
+        max_concurrency=config.max_search_concurrency,
     )
 
 
@@ -127,7 +138,7 @@ async def _agent_search_and_analyze(
         return [], []
 
     async with ContentParser() as parser:
-        scraped = await parser.parse_many(new_results, max_concurrent=5)
+        scraped = await parser.parse_many(new_results, max_concurrent=config.max_search_concurrency)
 
     url_to_result = {r.url: r for r in new_results}
 
@@ -178,7 +189,12 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
     # config built from --depth, so this only affects direct callers.
     config = config or ResearchConfig.from_depth(ResearchDepth.STANDARD)
     tracker = new_run_tracker()
-    aggregator = _build_aggregator()
+    # Agent mode is the burstiest path (extra decision/gap calls on top of the
+    # analyze fan-out), so default to a gentler LLM concurrency unless the user
+    # has explicitly lowered max_llm_concurrency further.
+    agent_concurrency = min(config.max_llm_concurrency, settings.agent_max_llm_concurrency)
+    set_llm_concurrency(agent_concurrency)
+    aggregator = _build_aggregator(config)
 
     tmpl = get_template(config.template) if config.template else None
     if tmpl:
@@ -330,7 +346,7 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
 
         task = progress.add_task("[cyan]Agent: Synthesizing final report...", total=None)
         async with stage("synthesize"):
-            executive, detailed, follow_ups = await asynthesize_report(
+            executive, detailed, follow_ups, ok = await asynthesize_report_safe(
                 query, report.sub_questions, report.sources,
                 thinking=config.use_thinking, model=config.models.get("synthesize"),
                 template_guidance=tmpl.synthesis_guidance if tmpl else "",
@@ -341,8 +357,16 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         report.executive_summary = executive
         report.detailed_findings = detailed
         report.follow_up_questions = follow_ups
-        progress.update(task, completed=True, description="[green]Report complete!")
+        if ok:
+            progress.update(task, completed=True, description="[green]Report complete!")
+        else:
+            progress.update(task, completed=True, description="[yellow]Synthesis failed — sources preserved")
 
     report.usage = tracker.snapshot()
+    if not ok:
+        console.print(
+            f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
+            "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
+        )
     console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report

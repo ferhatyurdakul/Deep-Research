@@ -24,6 +24,29 @@ def _xdg_data_home() -> Path:
     return Path(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")))
 
 
+def _int_env(name: str, default: int) -> int:
+    """Parse an int env var, falling back to `default` on missing/invalid input."""
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r (expected an integer); using %d.", name, raw, default)
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r (expected a number); using %s.", name, raw, default)
+        return default
+
+
 _dotenv_path = find_dotenv(usecwd=True)
 if _dotenv_path:
     load_dotenv(_dotenv_path)
@@ -108,6 +131,38 @@ class Settings(BaseModel):
     max_sub_questions: int = 5
     max_search_results: int = 5
     max_scrape_pages: int = 3
+
+    # --- Concurrency & budget knobs -------------------------------------
+    # These cap how bursty a run is. Lower them when a provider rate-limits
+    # (e.g. Z.AI/GLM 429s) during deep/agent research.
+    #
+    # Concurrent in-flight LLM calls during source analysis. The analyzer
+    # fans out one analyze (+summary +extract) chain per source; this is the
+    # ceiling on how many run at once.
+    max_llm_concurrency: int = _int_env("MAX_LLM_CONCURRENCY", 5)
+    # Gentler default applied in --agent mode, which issues extra
+    # decision/gap calls on top of analysis. Capped by max_llm_concurrency.
+    agent_max_llm_concurrency: int = _int_env("AGENT_MAX_LLM_CONCURRENCY", 3)
+    # Concurrent search/extraction HTTP requests across all providers.
+    max_search_concurrency: int = _int_env("MAX_SEARCH_CONCURRENCY", 5)
+
+    # Retry/backoff for transient and rate-limit errors. Rate limits get a
+    # longer base wait (see llm._wait_strategy); jitter is always applied.
+    llm_max_retries: int = _int_env("LLM_MAX_RETRIES", 5)
+    llm_retry_base_seconds: float = _float_env("LLM_RETRY_BASE_SECONDS", 2.0)
+    llm_retry_max_seconds: float = _float_env("LLM_RETRY_MAX_SECONDS", 60.0)
+
+    # Optional research-shape overrides. 0 / unset = use the --depth preset.
+    max_sub_questions_override: int = _int_env("MAX_SUB_QUESTIONS", 0)
+    max_search_results_override: int = _int_env("MAX_SEARCH_RESULTS", 0)
+    max_iterations_override: int = _int_env("MAX_ITERATIONS", 0)
+    max_sources_override: int = _int_env("MAX_SOURCES", 0)
+
+    # Agent-mode iteration budgets per depth. 0 = use the built-in default
+    # (quick 3 / standard 5 / deep 8), always capped at MAX_AGENT_ITERATIONS.
+    agent_budget_quick: int = _int_env("AGENT_BUDGET_QUICK", 0)
+    agent_budget_standard: int = _int_env("AGENT_BUDGET_STANDARD", 0)
+    agent_budget_deep: int = _int_env("AGENT_BUDGET_DEEP", 0)
 
     # Named stage-routing profile: "balanced" (default) | "budget" | "quality"
     # See capabilities.RECOMMENDED_ROUTES for the per-provider catalog.

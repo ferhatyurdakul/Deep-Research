@@ -191,9 +191,19 @@ def deduplicate_results(results: list[SearchResult]) -> list[SearchResult]:
     def _maybe_replace(existing: SearchResult, candidate: SearchResult) -> None:
         """Replace existing with candidate if candidate has higher source priority."""
         if _source_type_priority(candidate.source_type) < _source_type_priority(existing.source_type):
-            idx = output.index(existing)
-            output[idx] = candidate
-            # Update all index dicts to point to new winner
+            try:
+                idx = output.index(existing)
+            except ValueError:
+                # `existing` was already evicted by an earlier replacement but a
+                # stale dict entry still points at it. Nothing to swap in-place;
+                # just refresh the index maps below so future lookups resolve.
+                idx = None
+            if idx is not None:
+                output[idx] = candidate
+            # Update all index dicts to point to new winner. Re-map the *old*
+            # URL too, so a later result matching it resolves to the live
+            # winner instead of the evicted object (which would raise above).
+            seen_urls[_normalize_url(existing.url)] = candidate
             norm = _normalize_url(candidate.url)
             seen_urls[norm] = candidate
             aid = _extract_arxiv_id(candidate) or _extract_arxiv_id(existing)
@@ -253,8 +263,10 @@ class SearchAggregator:
         self,
         tavily_api_key: str = "",
         semantic_scholar_api_key: str = "",
+        max_concurrency: int = 5,
     ) -> None:
         self._providers: dict[str, SearchProvider] = {}
+        self._max_concurrency = max(1, max_concurrency)
         self._init_providers(tavily_api_key, semantic_scholar_api_key)
 
     def _init_providers(
@@ -302,6 +314,11 @@ class SearchAggregator:
         has_academic = any(s in _ACADEMIC_PROVIDERS for s in active_sources)
         has_web = any(s in _WEB_PROVIDERS for s in active_sources)
 
+        # One semaphore shared across every provider's batch_search so the
+        # total concurrent search requests stay under max_concurrency, no
+        # matter how many providers × queries fan out.
+        search_sem = asyncio.Semaphore(self._max_concurrency)
+
         tasks = []
         task_names = []
         for name in active_sources:
@@ -313,7 +330,7 @@ class SearchAggregator:
             per_query = max_results_per_query
             if has_academic and has_web and name in _ACADEMIC_PROVIDERS:
                 per_query = max(max_results_per_query, max_results_per_query + 2)
-            tasks.append(provider.batch_search(queries, per_query))
+            tasks.append(provider.batch_search(queries, per_query, semaphore=search_sem))
             task_names.append(name)
 
         if not tasks:
