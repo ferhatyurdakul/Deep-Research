@@ -261,13 +261,14 @@ One-shot CLI flags still work: `deep-research "topic"`, `deep-research --depth d
 Route pipeline stages to different models for cost/quality tradeoffs:
 
 ```env
-MODEL_DECOMPOSE=glm-4.5-air      # fast/cheap for decomposition
-MODEL_ANALYZE=glm-5.1             # thinking model for analysis
-MODEL_SYNTHESIZE=glm-5.1          # best model for synthesis
-MODEL_GAP_ANALYSIS=glm-5.1        # thinking model for gap detection
+GLM_MODEL=glm-5.2                 # default Z.AI model
+MODEL_DECOMPOSE=                  # leave empty to use the balanced route
+MODEL_ANALYZE=
+MODEL_SYNTHESIZE=
+MODEL_GAP_ANALYSIS=
 ```
 
-Leave empty to use `GLM_MODEL` for everything.
+For the Z.AI provider, the `balanced` route uses `glm-5.2` for every stage by default. Per-stage variables override the route when you need a custom cost/quality split. Claude Code's `glm-5.2[1m]` suffix is not accepted by the direct Z.AI API endpoint used here, so Deep Research uses the working direct API model ID.
 
 ## Rate Limits & Concurrency
 

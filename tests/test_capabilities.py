@@ -143,11 +143,12 @@ class TestSettingsValidateRoutes:
     def test_zai_default_passes(self):
         s = Settings(
             llm_provider="zai", zai_api_key="fake",
-            glm_model="glm-5",
+            glm_model="glm-5.2",
         )
         info = s.validate_routes()
         assert info["provider"] == "zai"
         assert info["endpoint_family"] == "openai"
+        assert info["model"] == "glm-5.2"
 
     def test_opencode_go_default_passes(self):
         s = Settings(

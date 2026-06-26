@@ -104,6 +104,14 @@ _register(ModelCapability(
     tier="production",
 ))
 _register(ModelCapability(
+    provider="zai", model_id="glm-5.2",
+    endpoint_families=frozenset({"openai"}),
+    thinking_supported=True,
+    thinking_dialect="zai-extra-body",
+    tier="production",
+    notes="GLM-5.2 direct API model. The Claude Code-only [1m] suffix is not accepted by this endpoint.",
+))
+_register(ModelCapability(
     provider="zai", model_id="glm-4.5-air",
     endpoint_families=frozenset({"openai"}),
     thinking_supported=False,
@@ -189,13 +197,12 @@ class StageRoute(BaseModel):
 
 # Keyed by (provider, profile_name).
 RECOMMENDED_ROUTES: dict[tuple[str, str], StageRoute] = {
-    # Z.AI: matches the long-standing CLAUDE.md recommendation — cheap GLM
-    # for decomposition, full GLM-5.1 for analysis/gap/synthesis.
+    # Z.AI: use GLM-5.2 for every stage by default.
     ("zai", "balanced"): StageRoute(
-        decompose="glm-4.5-air",
-        analyze="glm-5.1",
-        gap_analysis="glm-5.1",
-        synthesize="glm-5.1",
+        decompose="glm-5.2",
+        analyze="glm-5.2",
+        gap_analysis="glm-5.2",
+        synthesize="glm-5.2",
     ),
     # OpenCode Go: only the GLMs are production-tier here, so the safe
     # default keeps every stage on glm-5.1. No model mixing, no surprises.

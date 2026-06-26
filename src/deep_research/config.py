@@ -117,7 +117,7 @@ class Settings(BaseModel):
     # --- Z.AI provider (existing) ---
     zai_api_key: str = os.getenv("ZAI_API_KEY", "")
     zai_base_url: str = os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
-    glm_model: str = os.getenv("GLM_MODEL", "glm-5")
+    glm_model: str = os.getenv("GLM_MODEL", "glm-5.2")
 
     # --- OpenCode Go provider ---
     opencode_api_key: str = os.getenv("OPENCODE_API_KEY", "")
