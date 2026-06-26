@@ -36,10 +36,14 @@ class TestRouteRegistry:
         # would silently drop one.
         assert set(PIPELINE_STAGES) == {"decompose", "analyze", "gap_analysis", "synthesize"}
 
-    def test_zai_balanced_uses_air_for_decompose(self):
+    def test_zai_balanced_uses_glm52_for_every_stage(self):
         route = resolve_stage_route("zai", "balanced")
-        assert route.decompose == "glm-4.5-air"
-        assert route.synthesize == "glm-5.1"
+        assert route.as_dict() == {
+            "decompose": "glm-5.2",
+            "analyze": "glm-5.2",
+            "gap_analysis": "glm-5.2",
+            "synthesize": "glm-5.2",
+        }
 
     def test_opencode_go_balanced_is_all_glm(self):
         # Production-tier safe default; no model mixing.
