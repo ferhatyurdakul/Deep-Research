@@ -27,6 +27,8 @@ async def adecompose_query(
     sub_questions = [
         SubQuestion(**sq) for sq in raw if isinstance(sq, dict) and sq.get("question")
     ]
+    # The prompt asks for max_q but models overshoot; enforce it.
+    sub_questions = sub_questions[:max_q]
     # Degenerate fallback: if the model returned no usable sub-questions (bad
     # JSON, wrong shape, empty list), research the original query directly rather
     # than proceeding with an empty plan that yields a hollow, source-less report.

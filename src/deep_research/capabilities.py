@@ -197,6 +197,21 @@ RECOMMENDED_ROUTES: dict[tuple[str, str], StageRoute] = {
         gap_analysis="glm-5.1",
         synthesize="glm-5.1",
     ),
+    # Z.AI "budget": the cheap air model carries the high-volume iterative
+    # stages; quality-sensitive gap-analysis/synthesis stay on glm-5.1.
+    ("zai", "budget"): StageRoute(
+        decompose="glm-4.5-air",
+        analyze="glm-4.5-air",
+        gap_analysis="glm-5.1",
+        synthesize="glm-5.1",
+    ),
+    # Z.AI "quality": strongest registered model on every stage.
+    ("zai", "quality"): StageRoute(
+        decompose="glm-5.1",
+        analyze="glm-5.1",
+        gap_analysis="glm-5.1",
+        synthesize="glm-5.1",
+    ),
     # OpenCode Go: only the GLMs are production-tier here, so the safe
     # default keeps every stage on glm-5.1. No model mixing, no surprises.
     ("opencode-go", "balanced"): StageRoute(
@@ -251,6 +266,11 @@ def lookup(provider: str, model_id: str) -> ModelCapability | None:
 
 def known_models(provider: str) -> list[str]:
     return sorted(m for (p, m) in _REGISTRY if p == provider)
+
+
+def registered_providers_for(model_id: str) -> list[str]:
+    """All providers that have `model_id` registered (any tier)."""
+    return sorted(p for (p, m) in _REGISTRY if m == model_id)
 
 
 def resolve_endpoint_family(

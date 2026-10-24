@@ -14,6 +14,8 @@ from tenacity import retry, stop_after_attempt, retry_if_exception_type
 
 from .capabilities import (
     describe_route,
+    lookup,
+    registered_providers_for,
     resolve_endpoint_family,
     resolve_thinking,
     thinking_dialect,
@@ -161,7 +163,10 @@ def _swap_to_fallback_provider() -> bool:
     fallback equals the current provider, or the fallback lacks credentials.
     """
     fallback = settings.llm_fallback_provider
-    if not fallback or fallback == settings.llm_provider:
+    if not fallback or fallback == settings.active_provider:
+        return False
+    if fallback not in ("zai", "opencode-go"):
+        # Defensive: validate_routes() should have caught this at startup.
         return False
     original = settings.llm_provider
     settings.llm_provider = fallback
@@ -173,6 +178,19 @@ def _swap_to_fallback_provider() -> bool:
             fallback, original,
         )
         return False
+    # A user-pinned endpoint family may not exist on the fallback provider
+    # (e.g. LLM_ENDPOINT_FAMILY=anthropic while falling back to zai, which
+    # only speaks the OpenAI protocol). Drop the pin so routing resolves to
+    # a family the fallback actually supports.
+    if settings.llm_endpoint_family:
+        try:
+            settings.active_endpoint_family
+        except Exception:
+            logger.warning(
+                "Endpoint family %r is not available on fallback provider %r; clearing it.",
+                settings.llm_endpoint_family, fallback,
+            )
+            settings.llm_endpoint_family = ""
     get_tracker().record_fallback(original, fallback)
     logger.warning(
         "Rate limit on provider %r; switching to fallback provider %r for the rest of the run.",
@@ -240,6 +258,24 @@ def _resolve_route(model: str | None, thinking: bool) -> _Route:
     """
     provider = settings.active_provider
     resolved_model = model or settings.active_model
+    if model is not None:
+        foreign = (
+            lookup(provider, model) is None
+            and registered_providers_for(model)
+        )
+        if foreign:
+            # The model is registered, but under a different provider — e.g.
+            # a per-stage route resolved before a mid-run fallback provider
+            # swap. Sending it to this provider's endpoint would fail; use
+            # the provider's default model instead. Unregistered custom model
+            # names are left alone (user override, deliberately off-registry).
+            logger.warning(
+                "Model %r is not available on provider %r (registered under: %s); "
+                "using provider default %r instead.",
+                model, provider, ", ".join(registered_providers_for(model)),
+                settings.active_model,
+            )
+            resolved_model = settings.active_model
     requested_family = settings.llm_endpoint_family or None
     family = resolve_endpoint_family(provider, resolved_model, requested_family)
     validate_route(provider, resolved_model, family)

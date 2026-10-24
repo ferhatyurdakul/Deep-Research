@@ -1,20 +1,36 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — 2026-10-24
 
 ### Added
 
 - **Rate-limit resilience.** Provider-aware exponential backoff with jitter for `429`/timeout errors (rate limits wait ~3× longer than generic transients), and per-retry logging of provider, endpoint family, model, stage, and attempt count. Tenacity now re-raises the underlying provider error after exhausting retries so the fallback-provider swap and `ProviderLimitExceeded` paths actually fire.
 - **Concurrency knobs**: `MAX_LLM_CONCURRENCY` (analyze fan-out), `AGENT_MAX_LLM_CONCURRENCY` (gentler default auto-applied in `--agent` mode), and `MAX_SEARCH_CONCURRENCY` (shared cap on search + extraction HTTP). Search providers now honor a shared semaphore instead of opening unbounded concurrent requests.
 - **Run-shape / budget knobs**: `MAX_SUB_QUESTIONS`, `MAX_SEARCH_RESULTS`, `MAX_ITERATIONS`, `MAX_SOURCES`, `AGENT_BUDGET_QUICK/_STANDARD/_DEEP`, and `LLM_MAX_RETRIES` / `LLM_RETRY_BASE_SECONDS` / `LLM_RETRY_MAX_SECONDS`.
-- **Graceful partial results**: if synthesis fails after sources are gathered (e.g. a mid-run rate-limit), the run preserves the source analyses and saves the session instead of crashing — re-run with `--resynthesize <id>` to retry only synthesis.
+- **Graceful partial results.** Three layers: a source whose analysis fails (e.g. a 429 that outlives the retry budget) is skipped while its siblings are kept; an iteration that fails after sources were already collected stops the loop and synthesizes from what exists (the session is saved — resume with `--continue-session <id>`); and a synthesis failure preserves the gathered sources (retry with `--resynthesize <id>`). If *every* analysis fails, the run still aborts loudly rather than saving a hollow, source-less report.
 - README "Rate Limits & Concurrency" section, including recommended Z.AI/GLM settings for research vs coding workloads. New tests for backoff/jitter, retry/fallback, bounded concurrency, the partial-result path, and an offline end-to-end pipeline run.
+- **`zai` route profiles**: `budget` (glm-4.5-air for decompose+analyze, glm-5.1 for gap/synthesis) and `quality` (glm-5.1 everywhere) join `balanced`, so `LLM_ROUTE` works uniformly across both providers.
+- REPL `/fork <id> [query]` and `/resynthesize <id>` mirror the CLI flags; REPL history now respects `XDG_CONFIG_HOME`.
+
+
+### Changed
+
+- `MAX_LLM_CONCURRENCY` default lowered `5` → `2`. The default provider (Z.AI GLM coding plan) enforces a low per-plan concurrency cap that returns `429` (code `1302`), so the old fan-out of 5 mostly generated retry storms on Lite/Pro tiers. Raise it back to `3`–`5` on providers with real concurrency headroom.
+- **URL dedup is normalized end-to-end.** Cross-session URL filtering and the `analyzed_urls` registry compare the canonical form (scheme/`www.`/trailing-slash stripped), matching the within-search dedup, so variants of a known page are no longer re-fetched and re-analyzed. `report.searched_urls` now stores only URLs first seen in that run instead of a copy of the global history (session rows no longer grow unboundedly, and forks no longer duplicate it).
+- **`max_scrape_pages` is enforced.** The depth presets' page budgets (quick 2 / standard 3 / deep 5) now actually cap fetching; results beyond the budget become snippet sources.
+- Bare `deep-research logout` (and `/logout`) now clears the *active provider's* key — matching the README and `login`'s behavior — instead of every stored credential (`logout all` still clears everything).
+- CLI `--history` shows 25 rows, matching the REPL.
 
 ### Fixed
 
+- Deleting a parent session now clears `parent_session_id` on its children instead of leaving a dangling lineage id in `--history`; `--fork-query` without `--fork-session` is a hard error instead of being silently ignored; `fork_session` returns `None` instead of fabricating a `standard`-depth fork if the source session disappears mid-copy.
 - Synthesizer no longer leaks the report title/metadata into `executive_summary` (which duplicated headers in saved reports and showed the wrong content in `display_report`/`/inspect`).
 - `aidentify_gaps` tolerates malformed gap JSON instead of aborting the run; dedup no longer raises `ValueError` on a stale index pointer.
 - `extracted_data` now round-trips through the session DB. arXiv / Semantic Scholar requests send a User-Agent. Eval runner uses the active provider/model; eval citation checks count grouped `[1, 2]` refs. `/history` shows 25 rows; `/route` rolls back on error.
+- **Startup gating**: a failed capability check now aborts the run instead of proceeding with silently mismatched models, a typo'd `LLM_PROVIDER`/`LLM_ENDPOINT_FAMILY` prints a clean error (from the banner and `check_config`) instead of a traceback, an invalid `RESEARCH_DEPTH` env value falls back to `standard` with a warning, and `LLM_FALLBACK_PROVIDER` is validated at startup rather than exploding mid-429-recovery.
+- **Fallback-provider swap is route-safe**: after swapping, per-stage models registered only under the old provider fall back to the new provider's default (instead of being sent to an endpoint that 400s them), and an incompatible pinned `LLM_ENDPOINT_FAMILY` is cleared.
+- `--continue-session` now honors `--template` (guidance + system prompt + academic/extraction toggles), matching run/agent/resynthesize; follow-up questions after an `--agent` run stay in agent mode.
+- Hardening: negative `MAX_*`/retry env overrides are clamped instead of producing hollow zero-iteration runs or retry storms; malformed agent-decision JSON (non-dict, string `queries`) degrades instead of crashing; `aanalyze_source`/`aextract_data` tolerate top-level JSON arrays; `adecompose_query` truncates to `max_q`; synthesis with zero sources skips the LLM call with an actionable message instead of emitting "cite sources 1 to 0"; CLI `--delete` asks for confirmation on a tty; dead `Settings.max_sub_questions/max_search_results/max_scrape_pages` fields removed.
 
 ## v0.3.0 — 2026-05-10
 

@@ -20,6 +20,7 @@ from deep_research.models import (
 )
 from deep_research.search.aggregator import SearchAggregator
 from deep_research.storage.db import get_known_urls
+from deep_research.urls import normalize_url
 from deep_research.usage import new_run_tracker, stage
 
 from .analyzer import aanalyze_source, aidentify_gaps, format_analyses, set_llm_concurrency
@@ -69,10 +70,12 @@ async def _search_and_analyze(
     )
     progress.update(task, completed=True, description=f"[green]Found {len(search_results)} results")
 
-    # Filter already-seen URLs
-    new_results = [r for r in search_results if r.url not in seen_urls]
+    # Filter already-seen URLs. Comparisons use the normalized form so
+    # scheme/www/trailing-slash variants of a known page can't slip past
+    # the dedup (the aggregator already dedups this way within a search).
+    new_results = [r for r in search_results if normalize_url(r.url) not in seen_urls]
     for r in new_results:
-        seen_urls.add(r.url)
+        seen_urls.add(normalize_url(r.url))
 
     console.print(f"  [dim]{len(new_results)} new unique sources[/dim]")
 
@@ -82,7 +85,12 @@ async def _search_and_analyze(
     # Extract content using ContentParser
     task = progress.add_task("[cyan]Extracting content...", total=None)
     async with ContentParser() as parser:
-        scraped = await parser.parse_many(new_results, max_concurrent=config.max_search_concurrency)
+        # Honor the depth preset's scrape budget; the rest fall through to
+        # the snippet-fallback list below rather than being fetched.
+        scraped = await parser.parse_many(
+            new_results[:config.max_scrape_pages],
+            max_concurrent=config.max_search_concurrency,
+        )
     progress.update(task, completed=True, description=f"[green]Extracted {len(scraped)} pages")
 
     # Build URL → SearchResult lookup for metadata
@@ -112,8 +120,28 @@ async def _search_and_analyze(
                 extra=sr.extra if sr else {},
                 content_depth=depth,
             ))
-        analyzed = list(await asyncio.gather(*analyze_tasks))
-        progress.update(task, completed=True, description="[green]Source analysis complete")
+        results = await asyncio.gather(*analyze_tasks, return_exceptions=True)
+        analyzed, failed = [], []
+        for page, result in zip(scraped, results):
+            if isinstance(result, BaseException):
+                failed.append(result)
+                logger.warning("Analysis failed for %s: %r", page.url, result)
+            else:
+                analyzed.append(result)
+        if failed and not analyzed:
+            # Every source failed — systemic outage (e.g. the provider's rate
+            # limit outlived the whole retry budget), not one bad page. Raise
+            # rather than synthesize a hollow, source-less report.
+            raise failed[0]
+        if failed:
+            console.print(
+                f"  [yellow]{len(failed)}/{len(results)} source analyses failed; "
+                "continuing with the rest[/yellow]"
+            )
+        progress.update(
+            task, completed=True,
+            description=f"[green]Analyzed {len(analyzed)}/{len(results)} sources",
+        )
 
     # Snippet fallbacks for unscraped results
     scraped_urls = {s.url for s in scraped}
@@ -149,14 +177,13 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")
 
     report = ResearchReport(query=query)
-    if config.fresh:
-        previously_known = set()
-    else:
-        previously_known = get_known_urls()
-    seen_urls: set[str] = set(previously_known)
+    known_urls: set[str] = set()
+    if not config.fresh:
+        known_urls = {normalize_url(u) for u in get_known_urls()}
+    seen_urls: set[str] = set(known_urls)
     all_searched_queries: list[str] = []
-    if previously_known:
-        console.print(f"  [dim]Skipping {len(previously_known)} URLs known from previous sessions[/dim]")
+    if known_urls:
+        console.print(f"  [dim]Skipping {len(known_urls)} URLs known from previous sessions[/dim]")
 
     with Progress(
         SpinnerColumn(),
@@ -180,51 +207,76 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
             )
         )
 
-        # Iteration loop
+        # Iteration loop. If an iteration fails after sources were already
+        # collected (e.g. a 429 that outlives the retry budget), stop the loop
+        # and synthesize from what exists — the session is saved and
+        # --continue-session can resume it. With nothing collected there is no
+        # partial result worth saving, so the error propagates.
         for iteration_num in range(1, config.max_iterations + 1):
-            iteration = ResearchIteration(iteration_number=iteration_num)
+            try:
+                iteration = ResearchIteration(iteration_number=iteration_num)
 
-            if iteration_num == 1:
-                queries_to_search = [sq.question for sq in report.sub_questions]
-            else:
-                task = progress.add_task(
-                    f"[cyan]Iteration {iteration_num}: Analyzing knowledge gaps...", total=None
-                )
-                async with stage("gap_analysis"):
-                    gaps, is_sufficient = await aidentify_gaps(
-                        query, report.sub_questions, report.sources, all_searched_queries,
-                        thinking=config.use_thinking,
-                        model=config.models.get("gap_analysis"),
+                if iteration_num == 1:
+                    queries_to_search = [sq.question for sq in report.sub_questions]
+                else:
+                    task = progress.add_task(
+                        f"[cyan]Iteration {iteration_num}: Analyzing knowledge gaps...", total=None
                     )
-                iteration.knowledge_gaps = gaps
-                progress.update(task, completed=True, description="[green]Gap analysis complete")
+                    async with stage("gap_analysis"):
+                        gaps, is_sufficient = await aidentify_gaps(
+                            query, report.sub_questions, report.sources, all_searched_queries,
+                            thinking=config.use_thinking,
+                            model=config.models.get("gap_analysis"),
+                        )
+                    iteration.knowledge_gaps = gaps
+                    progress.update(task, completed=True, description="[green]Gap analysis complete")
 
-                if is_sufficient or not gaps:
-                    console.print("[green]  Research coverage is sufficient.[/green]")
-                    report.iterations.append(iteration)
-                    break
+                    if is_sufficient or not gaps:
+                        console.print("[green]  Research coverage is sufficient.[/green]")
+                        report.iterations.append(iteration)
+                        break
 
+                    console.print(
+                        Panel(
+                            "\n".join(f"  - {g.gap_description}" for g in gaps),
+                            title=f"[bold yellow]Iteration {iteration_num}: Filling Knowledge Gaps",
+                            border_style="yellow",
+                        )
+                    )
+                    queries_to_search = [g.suggested_query for g in gaps]
+
+                all_searched_queries.extend(queries_to_search)
+
+                async with stage("analyze"):
+                    analyzed, snippets = await _search_and_analyze(
+                        query, queries_to_search, seen_urls, config, progress, aggregator
+                    )
+                iteration.sources = analyzed
+                report.sources.extend(analyzed)
+                report.sources.extend(snippets)
+                report.iterations.append(iteration)
+            except Exception as e:
+                if not report.sources:
+                    raise
+                logger.warning("Iteration %d aborted: %r", iteration_num, e)
                 console.print(
-                    Panel(
-                        "\n".join(f"  - {g.gap_description}" for g in gaps),
-                        title=f"[bold yellow]Iteration {iteration_num}: Filling Knowledge Gaps",
-                        border_style="yellow",
-                    )
+                    f"\n[yellow]Iteration {iteration_num} failed after {len(report.sources)} "
+                    f"sources were collected: {e}\nContinuing to synthesis — the session "
+                    "will be saved; re-run with --continue-session <id> to resume research.[/yellow]"
                 )
-                queries_to_search = [g.suggested_query for g in gaps]
+                break
 
-            all_searched_queries.extend(queries_to_search)
+        # Run-scoped: only URLs first seen in THIS run. The global cross-session
+        # history lives in analyzed_urls; storing it per session made every
+        # session row (and every fork of it) grow without bound.
+        report.searched_urls = sorted(seen_urls - known_urls)
 
-            async with stage("analyze"):
-                analyzed, snippets = await _search_and_analyze(
-                    query, queries_to_search, seen_urls, config, progress, aggregator
-                )
-            iteration.sources = analyzed
-            report.sources.extend(analyzed)
-            report.sources.extend(snippets)
-            report.iterations.append(iteration)
-
-        report.searched_urls = list(seen_urls)
+        if not report.sources:
+            console.print(
+                "\n[yellow]No analyzable sources were found — skipping synthesis. "
+                "URLs already analyzed in earlier sessions are skipped; try "
+                "--fresh to revisit them, or a broader query.[/yellow]"
+            )
 
         # Synthesize
         task = progress.add_task("[cyan]Synthesizing final report...", total=None)
@@ -246,7 +298,7 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
             progress.update(task, completed=True, description="[yellow]Synthesis failed — sources preserved")
 
     report.usage = tracker.snapshot()
-    if not ok:
+    if not ok and report.sources:
         console.print(
             f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
             "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
@@ -264,6 +316,16 @@ async def acontinue_research(
     set_llm_concurrency(config.max_llm_concurrency)
     aggregator = _build_aggregator(config)
 
+    # Same template handling as arun_research: templates toggle academic
+    # search/extraction and steer synthesis prompts.
+    tmpl = get_template(config.template) if config.template else None
+    if tmpl:
+        if tmpl.use_academic:
+            config.use_academic_search = True
+        if tmpl.use_extraction:
+            config.use_extraction = True
+        console.print(f"  [dim]Using template: {tmpl.name}[/dim]")
+
     report = ResearchReport(
         query=previous.query,
         sub_questions=previous.sub_questions,
@@ -271,7 +333,13 @@ async def acontinue_research(
         iterations=list(previous.iterations),
         searched_urls=list(previous.searched_urls),
     )
-    seen_urls: set[str] = set(previous.searched_urls)
+    # Seed with everything the previous session touched plus the global
+    # cross-session registry (normalized), so continuation doesn't re-fetch
+    # pages the original run already analyzed.
+    known_urls: set[str] = set() if config.fresh else {normalize_url(u) for u in get_known_urls()}
+    known_urls |= {normalize_url(u) for u in previous.searched_urls}
+    known_urls |= {normalize_url(s.url) for s in previous.sources}
+    seen_urls: set[str] = set(known_urls)
     all_searched_queries: list[str] = [sq.question for sq in previous.sub_questions]
 
     with Progress(
@@ -279,53 +347,70 @@ async def acontinue_research(
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
+        # Same partial-result policy as arun_research: a failed iteration
+        # after sources exist stops the loop and synthesizes from what was
+        # already gathered; with nothing new collected the error propagates.
         for iteration_num in range(1, config.max_iterations + 1):
-            actual_num = len(report.iterations) + 1
-            iteration = ResearchIteration(iteration_number=actual_num)
+            try:
+                actual_num = len(report.iterations) + 1
+                iteration = ResearchIteration(iteration_number=actual_num)
 
-            task = progress.add_task(
-                f"[cyan]Iteration {actual_num}: Analyzing knowledge gaps...", total=None
-            )
-            async with stage("gap_analysis"):
-                gaps, is_sufficient = await aidentify_gaps(
-                    report.query, report.sub_questions, report.sources, all_searched_queries,
-                    thinking=config.use_thinking,
-                    model=config.models.get("gap_analysis"),
+                task = progress.add_task(
+                    f"[cyan]Iteration {actual_num}: Analyzing knowledge gaps...", total=None
                 )
-            iteration.knowledge_gaps = gaps
-            progress.update(task, completed=True, description="[green]Gap analysis complete")
+                async with stage("gap_analysis"):
+                    gaps, is_sufficient = await aidentify_gaps(
+                        report.query, report.sub_questions, report.sources, all_searched_queries,
+                        thinking=config.use_thinking,
+                        model=config.models.get("gap_analysis"),
+                    )
+                iteration.knowledge_gaps = gaps
+                progress.update(task, completed=True, description="[green]Gap analysis complete")
 
-            if is_sufficient or not gaps:
-                console.print("[green]  Research coverage is sufficient.[/green]")
+                if is_sufficient or not gaps:
+                    console.print("[green]  Research coverage is sufficient.[/green]")
+                    report.iterations.append(iteration)
+                    break
+
+                console.print(
+                    Panel(
+                        "\n".join(f"  - {g.gap_description}" for g in gaps),
+                        title=f"[bold yellow]Iteration {actual_num}: Filling Knowledge Gaps",
+                        border_style="yellow",
+                    )
+                )
+                queries_to_search = [g.suggested_query for g in gaps]
+                all_searched_queries.extend(queries_to_search)
+
+                async with stage("analyze"):
+                    analyzed, snippets = await _search_and_analyze(
+                        report.query, queries_to_search, seen_urls, config, progress, aggregator
+                    )
+                iteration.sources = analyzed
+                report.sources.extend(analyzed)
+                report.sources.extend(snippets)
                 report.iterations.append(iteration)
+            except Exception as e:
+                if not report.sources:
+                    raise
+                logger.warning("Continuation iteration %d aborted: %r", iteration_num, e)
+                console.print(
+                    f"\n[yellow]Iteration {len(report.iterations) + 1} failed after "
+                    f"{len(report.sources)} sources were collected: {e}\nContinuing to "
+                    "synthesis — the session will be saved; re-run with "
+                    "--continue-session <id> to resume research.[/yellow]"
+                )
                 break
 
-            console.print(
-                Panel(
-                    "\n".join(f"  - {g.gap_description}" for g in gaps),
-                    title=f"[bold yellow]Iteration {actual_num}: Filling Knowledge Gaps",
-                    border_style="yellow",
-                )
-            )
-            queries_to_search = [g.suggested_query for g in gaps]
-            all_searched_queries.extend(queries_to_search)
-
-            async with stage("analyze"):
-                analyzed, snippets = await _search_and_analyze(
-                    report.query, queries_to_search, seen_urls, config, progress, aggregator
-                )
-            iteration.sources = analyzed
-            report.sources.extend(analyzed)
-            report.sources.extend(snippets)
-            report.iterations.append(iteration)
-
-        report.searched_urls = list(seen_urls)
+        report.searched_urls = sorted(seen_urls - known_urls)
 
         task = progress.add_task("[cyan]Synthesizing updated report...", total=None)
         async with stage("synthesize"):
             executive, detailed, follow_ups, ok = await asynthesize_report_safe(
                 report.query, report.sub_questions, report.sources,
                 thinking=config.use_thinking, model=config.models.get("synthesize"),
+                template_guidance=tmpl.synthesis_guidance if tmpl else "",
+                system_prompt=tmpl.system_prompt if tmpl else "",
                 report_style=config.report_style,
                 iteration_count=len(report.iterations),
             )
@@ -338,7 +423,7 @@ async def acontinue_research(
             progress.update(task, completed=True, description="[yellow]Synthesis failed — sources preserved")
 
     report.usage = tracker.snapshot()
-    if not ok:
+    if not ok and report.sources:
         console.print(
             f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
             "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"

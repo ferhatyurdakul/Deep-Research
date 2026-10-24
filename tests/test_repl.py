@@ -142,3 +142,20 @@ class TestProviderAndRouteCommands:
             s = ReplState()
             dispatch("/provider made-up-provider", s)
             assert custom.llm_provider == "opencode-go"  # unchanged
+
+
+class TestForkCommand:
+    def test_fork_dispatches_with_optional_query(self, monkeypatch, capsys):
+        import deep_research.repl as repl_mod
+
+        calls = {}
+
+        def _fake_fork(sid, new_query=None):
+            calls["sid"], calls["q"] = sid, new_query
+            return 42
+
+        monkeypatch.setattr(repl_mod, "fork_session", _fake_fork)
+        dispatch("/fork 7 newer angle", ReplState())
+
+        assert calls == {"sid": 7, "q": "newer angle"}
+        assert "42" in capsys.readouterr().out

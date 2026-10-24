@@ -612,6 +612,26 @@ class TestDatabase:
         assert delete_session(session_id) is True
         assert load_report(session_id) is None
 
+    def test_known_urls_are_normalized(self, tmp_path, monkeypatch):
+        test_db = tmp_path / "norm.db"
+        import deep_research.config as cfg
+        import deep_research.storage.db as db_mod
+        monkeypatch.setattr(cfg, "DB_PATH", test_db)
+        monkeypatch.setattr(db_mod, "DB_PATH", test_db)
+
+        from deep_research.storage.db import init_db, save_report, get_known_urls
+        from deep_research.models import ResearchReport, SourceAnalysis
+
+        init_db()
+        save_report(ResearchReport(query="q", sources=[
+            SourceAnalysis(url="https://a.com/x", title="A", key_findings=["f"]),
+            SourceAnalysis(url="http://www.a.com/x/", title="A2", key_findings=["f"]),
+            SourceAnalysis(url="https://b.com/y", title="B", key_findings=["f"]),
+        ]), depth="standard")
+
+        # Scheme/www/trailing-slash variants collapse to one registry entry.
+        assert get_known_urls() == {"a.com/x", "b.com/y"}
+
 
 class TestSessionForking:
     def _fresh_db(self, tmp_path, monkeypatch):
@@ -703,7 +723,9 @@ class TestSessionForking:
         orig_id = save_report(original, depth="standard")
 
         fork_id = fork_session(orig_id, new_query="Refined variant")
+        assert fork_id is not None
         forked = load_report(fork_id)
+        assert forked is not None
         assert forked.query == "Refined variant"
         assert forked.parent_session_id == orig_id
         # Sources are still copied over
@@ -727,6 +749,59 @@ class TestSessionForking:
         rows = {s["id"]: s for s in list_sessions()}
         assert rows[orig_id]["parent_session_id"] is None
         assert rows[fork_id]["parent_session_id"] == orig_id
+
+    def test_fork_of_fork_records_immediate_parent(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import fork_session, load_report, save_report
+        from deep_research.models import ResearchReport
+
+        orig_id = save_report(ResearchReport(query="root"), depth="standard")
+        fork1_id = fork_session(orig_id)
+        fork2_id = fork_session(fork1_id)
+        assert fork1_id is not None and fork2_id is not None
+
+        fork1 = load_report(fork1_id)
+        fork2 = load_report(fork2_id)
+        assert fork1.parent_session_id == orig_id
+        assert fork2.parent_session_id == fork1_id  # immediate parent, not the root
+
+    def test_fork_preserves_depth(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import fork_session, list_sessions, save_report
+        from deep_research.models import ResearchReport
+
+        orig_id = save_report(ResearchReport(query="d"), depth="deep")
+        fork_id = fork_session(orig_id)
+        assert fork_id is not None
+
+        rows = {s["id"]: s for s in list_sessions()}
+        assert rows[fork_id]["depth"] == "deep"
+
+    def test_delete_parent_clears_children_lineage(self, tmp_path, monkeypatch):
+        self._fresh_db(tmp_path, monkeypatch)
+        from deep_research.storage.db import (
+            delete_session, fork_session, load_report, save_report,
+        )
+        from deep_research.models import ResearchReport
+
+        orig_id = save_report(ResearchReport(query="q"), depth="standard")
+        fork_id = fork_session(orig_id)
+        assert fork_id is not None
+
+        assert delete_session(orig_id) is True
+        child = load_report(fork_id)
+        assert child is not None
+        assert child.parent_session_id is None  # cleared, not dangling
+
+    def test_fork_query_without_fork_session_errors(self):
+        import subprocess
+
+        result = subprocess.run(
+            [sys.executable, "-m", "deep_research.main", "--fork-query", "x"],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert result.returncode == 1
+        assert "--fork-query requires --fork-session" in (result.stdout + result.stderr)
 
 
 # --- Report formatting ---
