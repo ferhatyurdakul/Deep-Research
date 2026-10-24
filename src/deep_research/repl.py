@@ -26,7 +26,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from .capabilities import CapabilityViolation, known_profiles
-from .config import settings
+from .config import _xdg_config_home, settings
 from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
 from .output.report import display_report, save_report
 from .setup_wizard import (
@@ -37,16 +37,16 @@ from .setup_wizard import (
 )
 from .storage.db import (
     delete_session,
+    fork_session,
     list_sessions,
     load_report as db_load,
-    save_report as db_save,
 )
 from .pipeline.orchestrator import acontinue_research, arun_research
 from .pipeline.agent import arun_agent_research
 
 console = Console()
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 
 @dataclass
@@ -297,6 +297,40 @@ def _cmd_delete(state: ReplState, args: list[str]) -> None:
     else:
         console.print(f"  [red]Session {sid} not found.[/red]")
 
+def _cmd_fork(state: ReplState, args: list[str]) -> None:
+    if not args or not args[0].isdigit():
+        console.print("  [red]Usage: /fork <session_id> [new query][/red]")
+        return
+    sid = int(args[0])
+    new_query = " ".join(args[1:]).strip() or None
+    new_id = fork_session(sid, new_query=new_query)
+    if new_id is None:
+        console.print(f"  [red]Session {sid} not found.[/red]")
+        return
+    console.print(f"  [green]Forked session {sid} -> {new_id}.[/green]")
+    if new_query:
+        console.print(f"  [dim]Fork query: {new_query}[/dim]")
+    console.print(f"  [dim]Use /continue {new_id} to refine the fork.[/dim]")
+
+
+def _cmd_resynthesize(state: ReplState, args: list[str]) -> None:
+    if not args or not args[0].isdigit():
+        console.print("  [red]Usage: /resynthesize <session_id>[/red]")
+        return
+    sid = int(args[0])
+    if db_load(sid) is None:
+        console.print(f"  [red]Session {sid} not found.[/red]")
+        return
+    from .main import async_resynthesize
+
+    config = state.to_config()
+    try:
+        asyncio.run(async_resynthesize(sid, config))
+    except SystemExit:
+        # async_resynthesize reports its own errors via console + sys.exit;
+        # inside the REPL that must not kill the session.
+        pass
+
 
 def _cmd_clear(state: ReplState, args: list[str]) -> None:
     console.clear()
@@ -355,6 +389,8 @@ COMMANDS: tuple[Command, ...] = (
     Command("/inspect",   _cmd_inspect,   "Show a stored session", "<id>"),
     Command("/continue",  _cmd_continue,  "Deepen a stored session", "<id>"),
     Command("/delete",    _cmd_delete,    "Delete a stored session", "<id>"),
+    Command("/fork",      _cmd_fork,      "Fork a session into a new branch", "<id> [query]"),
+    Command("/resynthesize", _cmd_resynthesize, "Re-run synthesis on a stored session's sources", "<id>"),
     Command("/clear",     _cmd_clear,     "Clear the screen"),
     Command("/setup",     _cmd_setup,     "Run the credential setup wizard"),
     Command("/login",     _cmd_login,     "Set a single API key in the keyring", "[KEY_NAME]"),
@@ -392,7 +428,7 @@ def _enable_history() -> None:
         import readline  # noqa: F401  (auto-attaches to input())
     except ImportError:
         return
-    history_dir = Path(os.path.expanduser("~/.config/deep-research"))
+    history_dir = _xdg_config_home() / "deep-research"
     try:
         history_dir.mkdir(parents=True, exist_ok=True)
     except OSError:

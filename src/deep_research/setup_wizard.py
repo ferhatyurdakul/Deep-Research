@@ -135,9 +135,18 @@ def run_logout(key_name: Optional[str] = None) -> None:
     """
     Clear one stored credential (or all of them with `all`).
     """
-    if key_name in (None, "all", "ALL"):
+    if key_name in ("all", "ALL"):
         targets = [k for k, _, _ in MANAGED_KEYS]
     else:
+        if key_name is None:
+            # Mirror run_login: bare `logout` (or /logout) clears exactly the
+            # active provider's key — not every stored credential.
+            from .config import settings
+            try:
+                key_name = settings.active_api_key_env_name
+            except Exception as e:
+                console.print(f"  [red]Cannot resolve the active provider: {e}[/red]")
+                return
         if key_name not in [k for k, _, _ in MANAGED_KEYS]:
             console.print(
                 f"[red]Unknown credential {key_name!r}.[/red] "

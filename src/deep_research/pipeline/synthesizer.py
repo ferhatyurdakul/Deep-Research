@@ -291,6 +291,20 @@ async def asynthesize_report_safe(
     `--resynthesize`, so the caller can still persist the collected sources and
     avoid repeating all the search/extraction work.
     """
+    # Every caller passes the source list third positionally
+    # (query, sub_questions, sources); a run that collected zero sources has
+    # nothing to synthesize and its citation rules would be nonsense
+    # ("only use source numbers 1 to 0") — skip the LLM call entirely.
+    sources = kwargs.get("analyses") or (args[2] if len(args) > 2 else None)
+    if not sources:
+        logger.warning("Synthesis requested with no sources; skipping LLM call.")
+        return (
+            "## No sources\n\n"
+            "No analyzable sources were found for this query — nothing to "
+            "synthesize. URLs already analyzed in earlier sessions are "
+            "skipped; re-run with --fresh to revisit them, or try a broader query.",
+            "", [], False,
+        )
     try:
         executive, detailed, follow_ups = await asynthesize_report(*args, **kwargs)
         return executive, detailed, follow_ups, True

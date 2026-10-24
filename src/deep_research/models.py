@@ -41,7 +41,7 @@ class ResearchConfig(BaseModel):
     max_iterations: int = 2
     max_sources: int = 30
     # Concurrency ceilings, populated from settings by apply_limits().
-    max_llm_concurrency: int = 5
+    max_llm_concurrency: int = 2
     max_search_concurrency: int = 5
     use_thinking: bool = False
     use_academic_search: bool = False

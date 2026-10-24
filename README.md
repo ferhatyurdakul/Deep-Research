@@ -169,7 +169,7 @@ deep-research --delete 5                        # remove a session
 
 ## Search Sources
 
-Four providers searched in parallel, deduplicated automatically:
+Up to four providers searched in parallel, deduplicated automatically. Web providers always run; the academic providers (arXiv, Semantic Scholar) are opt-in — enabled with `--academic`, `--depth deep`, or the science/literature templates:
 
 | Provider         | Type     | Key Required | Notes                           |
 |-----------------|----------|:------------:|---------------------------------|
@@ -178,15 +178,17 @@ Four providers searched in parallel, deduplicated automatically:
 | arXiv           | Academic | No           | Full metadata, always available |
 | Semantic Scholar | Academic | No           | API key optional for rate limits|
 
-When no Tavily key is set, DuckDuckGo is the primary web search. Academic sources are always enabled.
+When no Tavily key is set, DuckDuckGo is the primary web search. Academic providers join with `--academic` / `--depth deep` / the science or literature template.
 
 ## Depth Presets
 
-| Depth      | Sub-questions | Results/query | Iterations | Thinking | Academic | Extraction |
-|------------|:------------:|:-------------:|:----------:|:--------:|:--------:|:----------:|
-| `quick`    | 3            | 3             | 1          |          |          |            |
-| `standard` | 5            | 5             | 2          |          |          |            |
-| `deep`     | 7            | 7             | 3          | yes      | yes      | yes        |
+| Depth      | Sub-questions | Results/query | Pages scraped | Iterations | Thinking | Academic | Extraction |
+|------------|:------------:|:-------------:|:-------------:|:----------:|:--------:|:--------:|:----------:|
+| `quick`    | 3            | 3             | 2             | 1          |          |          |            |
+| `standard` | 5            | 5             | 3             | 2          |          |          |            |
+| `deep`     | 7            | 7             | 5             | 3          | yes      | yes      | yes        |
+
+Pages beyond the scrape budget fall back to search-snippet sources instead of being fetched.
 
 ## Research Templates
 
@@ -250,6 +252,8 @@ Anything not starting with `/` runs as a research query using the current settin
 | `/inspect <id>` | Show a stored session's metadata + summary |
 | `/continue <id>` | Deepen a stored session with current settings |
 | `/delete <id>` | Delete a stored session (asks for confirmation) |
+| `/fork <id> [query]` | Copy a session into a new branch (optionally with a different query) |
+| `/resynthesize <id>` | Re-run synthesis on a stored session's sources |
 | `/clear` | Clear the screen |
 | `/help` | Show command list |
 | `/quit` (`/exit`, `/q`) | Exit the REPL |
@@ -280,7 +284,7 @@ the content. The pipeline controls it in three ways, all tunable via env:
 
 | Env var | Default | Effect |
 |---|:---:|---|
-| `MAX_LLM_CONCURRENCY` | `5` | Concurrent analyze/summary/extract LLM calls |
+| `MAX_LLM_CONCURRENCY` | `2` | Concurrent analyze/summary/extract LLM calls — default matches the Z.AI GLM coding-plan concurrency cap; raise to `3`–`5` only on providers with headroom |
 | `AGENT_MAX_LLM_CONCURRENCY` | `3` | Gentler ceiling auto-applied in `--agent` mode (capped by the above) |
 | `MAX_SEARCH_CONCURRENCY` | `5` | Concurrent search + content-extraction HTTP requests |
 
@@ -305,9 +309,15 @@ attempt count:
 
 Set `LLM_FALLBACK_PROVIDER` (e.g. `zai` when primary is `opencode-go`, or vice
 versa) so a run that exhausts retries on one provider swaps to the other instead
-of aborting. If synthesis itself fails after sources are gathered, the run still
+of aborting.
+
+Failures degrade instead of discarding work. A source whose analysis fails is
+skipped while the rest continue; an iteration that fails after sources were
+already gathered stops the loop and synthesizes from what exists — the session
+is saved and `--continue-session <id>` resumes it. A failed synthesis still
 saves the collected sources — re-run with `--resynthesize <id>` to retry only
-the synthesis step without repeating search/extraction.
+the synthesis step without repeating search/extraction. Only a failure that
+leaves *zero* sources (or every analysis in a batch failing) aborts the run.
 
 ### Recommended settings: research vs coding workloads
 
@@ -316,27 +326,32 @@ latency-sensitive. They want different knobs:
 
 | | Research (this tool) | Coding (IDE/agent) |
 |---|---|---|
-| Concurrency | `MAX_LLM_CONCURRENCY=3–5`, `AGENT_MAX_LLM_CONCURRENCY=2–3` | N/A (one call at a time) |
+| Concurrency | `MAX_LLM_CONCURRENCY=2–5`, `AGENT_MAX_LLM_CONCURRENCY=2–3` | N/A (one call at a time) |
 | Retries | `LLM_MAX_RETRIES=5`, longer `LLM_RETRY_MAX_SECONDS` (60s) — OK to wait | Fewer retries, short waits — fail fast for the human |
 | Depth/agent | `--depth deep`/`--agent` are heavy; pair with a fallback provider | — |
 | Thinking | On for analysis/synthesis quality | Off for speed unless needed |
 
-If you're hitting GLM 429s during ad-hoc deep/agent research, start with
-`MAX_LLM_CONCURRENCY=2 AGENT_MAX_LLM_CONCURRENCY=2` and set
-`LLM_FALLBACK_PROVIDER`. If you run research alongside heavy coding traffic on
-the same key, the research run is almost certainly the burst source — cap it
-there rather than throttling your editor.
+If you're hitting GLM 429s during ad-hoc deep/agent research, the default
+(`MAX_LLM_CONCURRENCY=2`) is already the safe setting — make sure you haven't
+raised it, and set `LLM_FALLBACK_PROVIDER`. If you run research alongside heavy
+coding traffic on the same key, the research run is almost certainly the burst
+source — cap it there rather than throttling your editor.
 
 ## Project Structure
 
 ```
 src/deep_research/
   main.py                  CLI entrypoint
+  repl.py                  Interactive REPL
   config.py                Settings from .env
+  credentials.py           OS-keyring credential access
+  setup_wizard.py          setup / login / logout / keys flows
+  logging_config.py        Logging setup
   llm.py                   LLM client (sync + async, multi-provider)
   capabilities.py          Per-model capability registry + recommended routes
   usage.py                 Per-run call tracker + fallback metadata
   models.py                Pydantic data models
+  urls.py                  Shared URL normalization for dedup
   search/                  Multi-provider search
     base.py                  SearchProvider ABC
     web_search.py            Tavily + DuckDuckGo
@@ -359,6 +374,7 @@ src/deep_research/
     citations.py             Citation formatting + validation
   storage/
     db.py                    SQLite persistence
+tests/                     Offline + e2e test suite
 
 evals/
   benchmarks.py            Benchmark query set, tagged by subset
@@ -398,7 +414,7 @@ python -m evals.run --tag smoke --label post-tone-fix
 python -m evals.compare evals/runs/<baseline-dir> evals/runs/<candidate-dir>
 ```
 
-Runs are written to `evals/runs/<timestamp>-<git-sha>[-label]/` with one directory per benchmark (report, raw JSON, checks). Benchmarks are defined in `evals/benchmarks.py` and tagged (`smoke` for fast iteration, `full` for the complete set).
+Runs are written to `evals/runs/<timestamp>-<git-sha>[-label]/` with one directory per benchmark (report, raw JSON, checks). Benchmarks are defined in `evals/benchmarks.py` and tagged (`smoke` for fast iteration, `full` for the complete set, `contested` for topics with actively disputed answers).
 
 Mechanical checks include:
 

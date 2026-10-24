@@ -75,8 +75,16 @@ class TestRouteRegistry:
     def test_known_profiles_per_provider(self):
         zai_profiles = known_profiles("zai")
         oc_profiles = known_profiles("opencode-go")
-        assert "balanced" in zai_profiles
+        assert set(zai_profiles) == {"balanced", "budget", "quality"}
         assert set(oc_profiles) == {"balanced", "budget", "quality"}
+
+    def test_zai_budget_and_quality_profiles_exist(self):
+        budget = resolve_stage_route("zai", "budget")
+        assert budget.decompose == "glm-4.5-air"
+        assert budget.analyze == "glm-4.5-air"
+        assert budget.synthesize == "glm-5.1"
+        quality = resolve_stage_route("zai", "quality")
+        assert set(quality.as_dict().values()) == {"glm-5.1"}
 
 
 class TestEffectiveStageModels:
@@ -197,3 +205,22 @@ class TestPipelineRouterFilledFromProfile:
             rc.load_model_routes()
         assert rc.models.decompose == "deepseek-v4-flash"  # override
         assert rc.models.analyze == "glm-5.1"             # profile fill
+
+
+class TestConfigValidation:
+    def test_unknown_provider_raises_capability_violation(self):
+        # CapabilityViolation (a ValueError subclass) so check_config and the
+        # REPL both handle a typo'd provider uniformly.
+        from deep_research.capabilities import CapabilityViolation as CV
+
+        s = Settings(llm_provider="typo")
+        with pytest.raises(CV):
+            _ = s.active_provider
+
+    def test_validate_routes_rejects_unknown_fallback_provider(self):
+        s = Settings(
+            llm_provider="zai", zai_api_key="x", glm_model="glm-5",
+            llm_fallback_provider="nope",
+        )
+        with pytest.raises(CapabilityViolation, match="LLM_FALLBACK_PROVIDER"):
+            s.validate_routes()

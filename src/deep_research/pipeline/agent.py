@@ -22,6 +22,7 @@ from deep_research.models import (
 )
 from deep_research.search.aggregator import SearchAggregator
 from deep_research.storage.db import get_known_urls
+from deep_research.urls import normalize_url
 from deep_research.usage import new_run_tracker, stage
 
 from .analyzer import aanalyze_source, format_analyses, set_llm_concurrency
@@ -130,15 +131,22 @@ async def _agent_search_and_analyze(
         academic_weight=0.65 if config.use_academic_search else 0.5,
     )
 
-    new_results = [r for r in search_results if r.url not in seen_urls]
+    # Normalized comparisons so scheme/www/trailing-slash variants of a
+    # known page can't slip past the dedup (matches aggregator behavior).
+    new_results = [r for r in search_results if normalize_url(r.url) not in seen_urls]
     for r in new_results:
-        seen_urls.add(r.url)
+        seen_urls.add(normalize_url(r.url))
 
     if not new_results:
         return [], []
 
     async with ContentParser() as parser:
-        scraped = await parser.parse_many(new_results, max_concurrent=config.max_search_concurrency)
+        # Honor the depth preset's scrape budget; the rest fall through to
+        # the snippet-fallback list below rather than being fetched.
+        scraped = await parser.parse_many(
+            new_results[:config.max_scrape_pages],
+            max_concurrent=config.max_search_concurrency,
+        )
 
     url_to_result = {r.url: r for r in new_results}
 
@@ -162,7 +170,24 @@ async def _agent_search_and_analyze(
                 extra=sr.extra if sr else {},
                 content_depth=depth,
             ))
-        analyzed = list(await asyncio.gather(*analyze_tasks))
+        results = await asyncio.gather(*analyze_tasks, return_exceptions=True)
+        analyzed, failed = [], []
+        for p, result in zip(scraped, results):
+            if isinstance(result, BaseException):
+                failed.append(result)
+                logger.warning("Analysis failed for %s: %r", p.url, result)
+            else:
+                analyzed.append(result)
+        if failed and not analyzed:
+            # Every source failed — systemic outage (e.g. the provider's rate
+            # limit outlived the whole retry budget), not one bad page. Raise
+            # rather than hand the agent loop an empty batch.
+            raise failed[0]
+        if failed:
+            console.print(
+                f"  [yellow]{len(failed)}/{len(results)} source analyses failed; "
+                "continuing with the rest[/yellow]"
+            )
 
     scraped_urls = {s.url for s in scraped}
     snippets = [
@@ -205,11 +230,10 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")
 
     report = ResearchReport(query=query)
-    if config.fresh:
-        previously_known = set()
-    else:
-        previously_known = get_known_urls()
-    seen_urls: set[str] = set(previously_known)
+    known_urls: set[str] = set()
+    if not config.fresh:
+        known_urls = {normalize_url(u) for u in get_known_urls()}
+    seen_urls: set[str] = set(known_urls)
     all_searched_queries: list[str] = []
     max_iters = agent_iteration_budget(config.depth)
 
@@ -251,98 +275,132 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
         report.iterations.append(iteration)
         progress.update(task, completed=True, description=f"[green]Found {len(analyzed)} sources")
 
-        # Agent decision loop
+        # Agent decision loop. Same partial-result policy as the pipeline
+        # loop: a failure after sources exist stops the loop and synthesizes
+        # from what was collected; with nothing collected the error propagates.
         for iter_num in range(2, max_iters + 1):
-            task = progress.add_task(
-                f"[cyan]Agent: Evaluating research quality (iteration {iter_num})...", total=None
-            )
-
-            sq_text = "\n".join(f"- {sq.question}" for sq in report.sub_questions)
-            searched_text = "\n".join(f"- {q}" for q in all_searched_queries)
-            decision_prompt = AGENT_DECISION_PROMPT.format(
-                query=query,
-                sub_questions=sq_text,
-                findings_summary=format_analyses(report.sources),
-                searched_queries=searched_text,
-                source_count=len(report.sources),
-                iteration=iter_num,
-                max_iterations=max_iters,
-            )
-            async with stage("gap_analysis"):
-                decision = await achat_json(
-                    decision_prompt,
-                    thinking=config.use_thinking,
-                    model=config.models.get("gap_analysis"),
+            try:
+                task = progress.add_task(
+                    f"[cyan]Agent: Evaluating research quality (iteration {iter_num})...", total=None
                 )
 
-            action = decision.get("action", "sufficient")
-            reasoning = decision.get("reasoning", "")
-            # The model sometimes returns confidence as a string ("0.8"); coerce
-            # so the later f"{confidence:.0%}" formatting can't raise ValueError.
-            try:
-                confidence = float(decision.get("confidence", 1.0))
-            except (TypeError, ValueError):
-                confidence = 1.0
-            new_queries = decision.get("queries", [])
-            focus = decision.get("focus_area", "")
+                sq_text = "\n".join(f"- {sq.question}" for sq in report.sub_questions)
+                searched_text = "\n".join(f"- {q}" for q in all_searched_queries)
+                decision_prompt = AGENT_DECISION_PROMPT.format(
+                    query=query,
+                    sub_questions=sq_text,
+                    findings_summary=format_analyses(report.sources),
+                    searched_queries=searched_text,
+                    source_count=len(report.sources),
+                    iteration=iter_num,
+                    max_iterations=max_iters,
+                )
+                async with stage("gap_analysis"):
+                    decision = await achat_json(
+                        decision_prompt,
+                        thinking=config.use_thinking,
+                        model=config.models.get("gap_analysis"),
+                    )
 
-            progress.update(task, completed=True, description=f"[green]Agent decided: {action}")
+                if not isinstance(decision, dict):
+                    # Malformed decision JSON (e.g. a bare list) — degrade to
+                    # "stop here with what we have" instead of crashing.
+                    logger.warning("Agent decision was not a JSON object: %r", decision)
+                    decision = {}
+                action = decision.get("action", "sufficient")
+                reasoning = decision.get("reasoning", "")
+                # The model sometimes returns confidence as a string ("0.8"); coerce
+                # so the later f"{confidence:.0%}" formatting can't raise ValueError.
+                try:
+                    confidence = float(decision.get("confidence", 1.0))
+                except (TypeError, ValueError):
+                    confidence = 1.0
+                new_queries = decision.get("queries", [])
+                if isinstance(new_queries, str):
+                    # A single string would otherwise be iterated char-by-char.
+                    new_queries = [new_queries]
+                if not isinstance(new_queries, list):
+                    new_queries = []
+                new_queries = [q for q in new_queries if isinstance(q, str) and q.strip()]
+                focus = decision.get("focus_area", "")
 
-            if action == "sufficient":
+                progress.update(task, completed=True, description=f"[green]Agent decided: {action}")
+
+                if action == "sufficient":
+                    console.print(
+                        Panel(
+                            f"[green]{reasoning}[/green]\n[dim]Confidence: {confidence:.0%}[/dim]",
+                            title="[bold green]Agent: Research Sufficient",
+                            border_style="green",
+                        )
+                    )
+                    break
+
+                action_labels = {
+                    "search_more": "Searching for more information",
+                    "go_deeper": "Going deeper",
+                    "broaden": "Broadening perspective",
+                }
+                label = action_labels.get(action, action)
                 console.print(
                     Panel(
-                        f"[green]{reasoning}[/green]\n[dim]Confidence: {confidence:.0%}[/dim]",
-                        title="[bold green]Agent: Research Sufficient",
-                        border_style="green",
+                        f"[yellow]{reasoning}[/yellow]\n"
+                        f"[dim]Focus: {focus} | Confidence: {confidence:.0%}[/dim]\n"
+                        f"Queries: {', '.join(new_queries)}",
+                        title=f"[bold yellow]Agent: {label} (iteration {iter_num})",
+                        border_style="yellow",
                     )
+                )
+
+                if not new_queries:
+                    break
+
+                all_searched_queries.extend(new_queries)
+
+                task = progress.add_task(f"[cyan]Agent: {label}...", total=None)
+                async with stage("analyze"):
+                    analyzed, snippets = await _agent_search_and_analyze(
+                        query, new_queries, seen_urls, config, aggregator
+                    )
+
+                iteration = ResearchIteration(
+                    iteration_number=iter_num,
+                    sources=analyzed,
+                    knowledge_gaps=[
+                        KnowledgeGap(
+                            gap_description=focus,
+                            suggested_query=q,
+                            priority="high" if action == "search_more" else "medium",
+                        )
+                        for q in new_queries
+                    ],
+                )
+                report.sources.extend(analyzed)
+                report.sources.extend(snippets)
+                report.iterations.append(iteration)
+                progress.update(task, completed=True, description=f"[green]Added {len(analyzed)} sources")
+            except Exception as e:
+                if not report.sources:
+                    raise
+                logger.warning("Agent iteration %d aborted: %r", iter_num, e)
+                console.print(
+                    f"\n[yellow]Agent iteration {iter_num} failed after "
+                    f"{len(report.sources)} sources were collected: {e}\nContinuing to "
+                    "synthesis — the session will be saved; re-run with "
+                    "--continue-session <id> to resume research.[/yellow]"
                 )
                 break
 
-            action_labels = {
-                "search_more": "Searching for more information",
-                "go_deeper": "Going deeper",
-                "broaden": "Broadening perspective",
-            }
-            label = action_labels.get(action, action)
+        # Run-scoped (see orchestrator.arun_research): only URLs first seen
+        # in this run, not the global cross-session history.
+        report.searched_urls = sorted(seen_urls - known_urls)
+
+        if not report.sources:
             console.print(
-                Panel(
-                    f"[yellow]{reasoning}[/yellow]\n"
-                    f"[dim]Focus: {focus} | Confidence: {confidence:.0%}[/dim]\n"
-                    f"Queries: {', '.join(new_queries)}",
-                    title=f"[bold yellow]Agent: {label} (iteration {iter_num})",
-                    border_style="yellow",
-                )
+                "\n[yellow]No analyzable sources were found — skipping synthesis. "
+                "URLs already analyzed in earlier sessions are skipped; try "
+                "--fresh to revisit them, or a broader query.[/yellow]"
             )
-
-            if not new_queries:
-                break
-
-            all_searched_queries.extend(new_queries)
-
-            task = progress.add_task(f"[cyan]Agent: {label}...", total=None)
-            async with stage("analyze"):
-                analyzed, snippets = await _agent_search_and_analyze(
-                    query, new_queries, seen_urls, config, aggregator
-                )
-
-            iteration = ResearchIteration(
-                iteration_number=iter_num,
-                sources=analyzed,
-                knowledge_gaps=[
-                    KnowledgeGap(
-                        gap_description=focus,
-                        suggested_query=q,
-                        priority="high" if action == "search_more" else "medium",
-                    )
-                    for q in new_queries
-                ],
-            )
-            report.sources.extend(analyzed)
-            report.sources.extend(snippets)
-            report.iterations.append(iteration)
-            progress.update(task, completed=True, description=f"[green]Added {len(analyzed)} sources")
-
-        report.searched_urls = list(seen_urls)
 
         task = progress.add_task("[cyan]Agent: Synthesizing final report...", total=None)
         async with stage("synthesize"):
@@ -363,7 +421,7 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
             progress.update(task, completed=True, description="[yellow]Synthesis failed — sources preserved")
 
     report.usage = tracker.snapshot()
-    if not ok:
+    if not ok and report.sources:
         console.print(
             f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
             "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"

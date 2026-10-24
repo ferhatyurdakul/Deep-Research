@@ -37,19 +37,21 @@ def check_config(quiet: bool = False) -> bool:
     from .capabilities import CapabilityViolation
 
     ok = True
-    if not settings.active_api_key:
-        console.print(
-            f"[red]Error: {settings.active_api_key_env_name} not set in .env file "
-            f"(LLM_PROVIDER={settings.active_provider})[/red]"
-        )
-        ok = False
-    if not settings.tavily_api_key and not quiet:
-        console.print("[yellow]Warning: TAVILY_API_KEY not set — falling back to DuckDuckGo for web search[/yellow]")
     try:
+        if not settings.active_api_key:
+            console.print(
+                f"[red]Error: {settings.active_api_key_env_name} not set in .env file "
+                f"(LLM_PROVIDER={settings.llm_provider})[/red]"
+            )
+            ok = False
+        if not settings.tavily_api_key and not quiet:
+            console.print("[yellow]Warning: TAVILY_API_KEY not set — falling back to DuckDuckGo for web search[/yellow]")
         route = settings.validate_routes()
         if not quiet:
             console.print(f"[dim]Route: {route}[/dim]")
     except CapabilityViolation as e:
+        # Includes a typo'd LLM_PROVIDER / LLM_ENDPOINT_FAMILY: those surface
+        # as CapabilityViolation from the Settings properties now.
         console.print(f"[red]Capability check failed: {e}[/red]")
         ok = False
     return ok
@@ -58,9 +60,18 @@ def check_config(quiet: bool = False) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Deep Research - AI-powered research framework")
     parser.add_argument("query", nargs="*", help="Research query")
+    # argparse does not validate `default=` against `choices`, so an invalid
+    # RESEARCH_DEPTH env value would crash ResearchDepth(...) later — guard it.
+    default_depth = settings.default_depth
+    if default_depth not in ("quick", "standard", "deep"):
+        console.print(
+            f"[yellow]Ignoring invalid RESEARCH_DEPTH={default_depth!r} "
+            "(expected quick, standard, or deep); using standard.[/yellow]"
+        )
+        default_depth = "standard"
     parser.add_argument(
         "--depth", choices=["quick", "standard", "deep"],
-        default=settings.default_depth,
+        default=default_depth,
         help="Research depth (default: %(default)s)",
     )
     parser.add_argument(
@@ -143,7 +154,7 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
 
 
 def show_history() -> None:
-    sessions = list_sessions()
+    sessions = list_sessions(limit=25)
     if not sessions:
         console.print("[dim]No research sessions found.[/dim]")
         return
@@ -333,7 +344,7 @@ async def async_main(query: str, config: ResearchConfig, agent_mode: bool = Fals
     console.print(f"[green]Report saved to:[/green] {path}")
     console.print(f"[green]Session ID:[/green] {session_id}\n")
 
-    await followup_loop(report, config)
+    await followup_loop(report, config, agent_mode=agent_mode)
 
 
 async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
@@ -427,7 +438,7 @@ async def async_continue(session_id: int, config: ResearchConfig) -> None:
     await followup_loop(report, config)
 
 
-async def followup_loop(report, config: ResearchConfig) -> None:
+async def followup_loop(report, config: ResearchConfig, agent_mode: bool = False) -> None:
     if sys.stdin is None or not sys.stdin.isatty():
         return
 
@@ -446,7 +457,10 @@ async def followup_loop(report, config: ResearchConfig) -> None:
 
         console.print(f"\n[bold]Researching:[/bold] {followup}\n")
         try:
-            report = await arun_research(followup, config)
+            if agent_mode:
+                report = await arun_agent_research(followup, config)
+            else:
+                report = await arun_research(followup, config)
             display_report(report)
             path = save_report(report)
             session_id = db_save(report, depth=config.depth.value)
@@ -540,12 +554,22 @@ def main() -> None:
         return
 
     args = parse_args()
+    if args.fork_query.strip() and not args.fork_session:
+        console.print("[red]--fork-query requires --fork-session.[/red]")
+        sys.exit(1)
 
     if args.history:
         show_history()
         return
 
     if args.delete:
+        # Interactive callers get the same confirmation the REPL asks for;
+        # non-tty (scripts) proceed without prompting.
+        if sys.stdin is not None and sys.stdin.isatty():
+            from rich.prompt import Confirm
+            if not Confirm.ask(f"[bold]Delete session {args.delete}?[/bold]", default=False):
+                console.print("[dim]Cancelled.[/dim]")
+                return
         if delete_session(args.delete):
             console.print(f"[green]Session {args.delete} deleted.[/green]")
         else:
@@ -584,34 +608,46 @@ def main() -> None:
     )
 
     if not is_repl_launch:
-        search_engine = "Tavily" if settings.tavily_api_key else "DuckDuckGo"
-        console.print(
-            Panel(
-                "[bold]Deep Research[/bold]\n"
-                f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
-                f"Profile: {settings.llm_route} | Model: {settings.active_model} | "
-                f"Search: {search_engine} | Depth: {config.depth.value}[/dim]",
-                border_style="blue",
-            )
-        )
-
-        # Heuristic warning: deep depth + agent mode on opencode-go can burn
-        # through the $12/5h cap quickly. We can't query remaining budget — the
-        # OpenCode Go usage API isn't published — so this is purely advisory.
-        if (
-            settings.active_provider == "opencode-go"
-            and config.depth == ResearchDepth.DEEP
-            and getattr(args, "agent", False)
-            and not settings.llm_fallback_provider
-        ):
+        # The banner reads provider/model properties that raise on a typo'd
+        # LLM_PROVIDER / LLM_ENDPOINT_FAMILY — fail with the same clean
+        # message check_config uses instead of a traceback.
+        try:
+            search_engine = "Tavily" if settings.tavily_api_key else "DuckDuckGo"
             console.print(
-                "[yellow]Warning: --depth deep + --agent on OpenCode Go can consume a "
-                "significant share of the $12/5h cap. Consider setting "
-                "LLM_FALLBACK_PROVIDER (e.g. zai) so the run can survive a 429.[/yellow]"
+                Panel(
+                    "[bold]Deep Research[/bold]\n"
+                    f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
+                    f"Profile: {settings.llm_route} | Model: {settings.active_model} | "
+                    f"Search: {search_engine} | Depth: {config.depth.value}[/dim]",
+                    border_style="blue",
+                )
             )
+
+            # Heuristic warning: deep depth + agent mode on opencode-go can burn
+            # through the $12/5h cap quickly. We can't query remaining budget — the
+            # OpenCode Go usage API isn't published — so this is purely advisory.
+            if (
+                settings.active_provider == "opencode-go"
+                and config.depth == ResearchDepth.DEEP
+                and getattr(args, "agent", False)
+                and not settings.llm_fallback_provider
+            ):
+                console.print(
+                    "[yellow]Warning: --depth deep + --agent on OpenCode Go can consume a "
+                    "significant share of the $12/5h cap. Consider setting "
+                    "LLM_FALLBACK_PROVIDER (e.g. zai) so the run can survive a 429.[/yellow]"
+                )
+        except ValueError as e:  # includes CapabilityViolation
+            console.print(f"[red]Configuration error: {e}[/red]")
+            sys.exit(1)
 
     if not check_config(quiet=is_repl_launch):
-        if not settings.active_api_key:
+        try:
+            key_missing = not settings.active_api_key
+        except Exception:
+            # Invalid provider/family name — not a wizard case; exit below.
+            key_missing = False
+        if key_missing:
             console.print(
                 f"\n[yellow]No {settings.active_api_key_env_name} found in env, .env, or keyring.[/yellow]"
             )
@@ -623,12 +659,27 @@ def main() -> None:
                 if not settings.active_api_key:
                     console.print(f"[red]Still no {settings.active_api_key_env_name} configured. Exiting.[/red]")
                     sys.exit(1)
+                if not check_config(quiet=True):
+                    console.print(
+                        "\n[red]Route validation failed — fix the configuration "
+ "above and re-run.[/red]"
+                    )
+                    sys.exit(1)
             else:
                 console.print(
                     "[dim]Run `deep-research setup` to store credentials, or set "
                     f"{settings.active_api_key_env_name} in your environment.[/dim]"
                 )
                 sys.exit(1)
+        else:
+            # Keys are fine — the failure is a route/capability problem. Never
+            # start a run with a broken route: stage models would silently
+            # mismatch or the first LLM call would abort the run.
+            console.print(
+                "\n[red]Route validation failed — fix LLM_PROVIDER / LLM_ROUTE / "
+                "model settings above and re-run.[/red]"
+            )
+            sys.exit(1)
 
     if args.resynthesize:
         asyncio.run(async_resynthesize(args.resynthesize, config))

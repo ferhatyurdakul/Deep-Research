@@ -183,3 +183,35 @@ class TestSetupWizardSubcommands:
         run_logout("ZAI_API_KEY")
         assert get_credential("ZAI_API_KEY") is None
         assert get_credential("TAVILY_API_KEY") == "b"  # untouched
+
+
+class TestLogoutDefault:
+    def test_bare_logout_clears_only_active_provider_key(self, fake_keyring, monkeypatch):
+        from deep_research import credentials, setup_wizard
+        from deep_research.config import settings
+
+        credentials.set_credential("ZAI_API_KEY", "z-secret")
+        credentials.set_credential("TAVILY_API_KEY", "t-secret")
+        monkeypatch.setattr(settings, "llm_provider", "zai")
+
+        setup_wizard.run_logout(None)
+
+        assert credentials.get_credential("ZAI_API_KEY") is None
+        assert credentials.get_credential("TAVILY_API_KEY") == "t-secret"
+
+    def test_logout_all_clears_everything(self, fake_keyring, monkeypatch):
+        from types import SimpleNamespace
+
+        from deep_research import credentials, setup_wizard
+
+        credentials.set_credential("ZAI_API_KEY", "z")
+        credentials.set_credential("TAVILY_API_KEY", "t")
+        monkeypatch.setattr(
+            setup_wizard, "Confirm",
+            SimpleNamespace(ask=lambda *a, **k: True),
+        )
+
+        setup_wizard.run_logout("all")
+
+        assert credentials.get_credential("ZAI_API_KEY") is None
+        assert credentials.get_credential("TAVILY_API_KEY") is None

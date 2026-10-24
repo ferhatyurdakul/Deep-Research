@@ -196,13 +196,30 @@ class TestPartialSynthesis:
             raise RuntimeError("provider rate-limited mid-synthesis")
 
         monkeypatch.setattr(synth, "asynthesize_report", boom)
+        from deep_research.models import SourceAnalysis
+        src = SourceAnalysis(url="https://a.com", title="A", key_findings=["f"])
         executive, detailed, follow_ups, ok = await synth.asynthesize_report_safe(
-            "q", [], [],
+            "q", [], [src],
         )
         assert ok is False
         assert detailed == ""
         assert follow_ups == []
         assert "resynthesize" in executive.lower()
+
+    @pytest.mark.asyncio
+    async def test_empty_sources_skips_llm_entirely(self, monkeypatch):
+        import deep_research.pipeline.synthesizer as synth
+
+        async def boom(*args, **kwargs):
+            raise AssertionError("LLM must not be called with zero sources")
+
+        monkeypatch.setattr(synth, "asynthesize_report", boom)
+        executive, detailed, follow_ups, ok = await synth.asynthesize_report_safe(
+            "q", [], [],
+        )
+        assert ok is False
+        assert detailed == "" and follow_ups == []
+        assert "no sources" in executive.lower()
 
     @pytest.mark.asyncio
     async def test_synthesis_success_passes_through(self, monkeypatch):
@@ -212,8 +229,10 @@ class TestPartialSynthesis:
             return ("## Executive Summary\nGood [1].", "## Findings\nx [1].", ["q1"])
 
         monkeypatch.setattr(synth, "asynthesize_report", fine)
+        from deep_research.models import SourceAnalysis
+        src = SourceAnalysis(url="https://a.com", title="A", key_findings=["f"])
         executive, detailed, follow_ups, ok = await synth.asynthesize_report_safe(
-            "q", [], [],
+            "q", [], [src],
         )
         assert ok is True
         assert executive.startswith("## Executive Summary")
@@ -251,3 +270,46 @@ class TestConfigLimits:
         # Override above the hard cap is clamped.
         monkeypatch.setattr(settings, "agent_budget_deep", 99)
         assert agent_iteration_budget(ResearchDepth.DEEP) == MAX_AGENT_ITERATIONS
+
+
+class TestFallbackModelRouting:
+    @pytest.mark.asyncio
+    async def test_swapped_provider_drops_foreign_stage_models(self, monkeypatch):
+        """After a mid-run opencode-go → zai swap, a stage model registered
+        only under opencode-go must fall back to the zai default instead of
+        being sent to a provider that will 400 it."""
+        import deep_research.llm as llm
+
+        monkeypatch.setattr(llm.settings, "llm_provider", "opencode-go")
+        monkeypatch.setattr(llm.settings, "opencode_api_key", "k1")
+        monkeypatch.setattr(llm.settings, "zai_api_key", "k2")
+        monkeypatch.setattr(llm.settings, "llm_fallback_provider", "zai")
+        monkeypatch.setattr(llm.settings, "glm_model", "glm-5")
+        assert llm._swap_to_fallback_provider() is True
+        assert llm.settings.llm_provider == "zai"
+
+        captured = {}
+
+        class _Comp:
+            async def create(self, **kwargs):
+                captured["model"] = kwargs["model"]
+                return _ok_response()
+
+        client = SimpleNamespace(chat=SimpleNamespace(completions=_Comp()))
+        monkeypatch.setattr(llm, "get_async_client", lambda: client)
+
+        assert await llm.achat("hi", model="deepseek-v4-flash") == "ok"
+        assert captured["model"] == "glm-5"  # foreign model dropped
+
+        await llm.achat("hi", model="glm-5.1")  # registered on both
+        assert captured["model"] == "glm-5.1"
+
+    @pytest.mark.asyncio
+    async def test_swap_rejects_unconfigured_fallback_name(self, monkeypatch):
+        """A fallback name that isn't a known provider never mutates state."""
+        import deep_research.llm as llm
+
+        monkeypatch.setattr(llm.settings, "llm_provider", "zai")
+        monkeypatch.setattr(llm.settings, "llm_fallback_provider", "not-a-provider")
+        assert llm._swap_to_fallback_provider() is False
+        assert llm.settings.llm_provider == "zai"

@@ -6,7 +6,7 @@ import re
 from urllib.parse import urlparse
 
 from deep_research.models import SearchResult, SourceType
-
+from deep_research.urls import normalize_url as _normalize_url
 from .arxiv_search import ArxivSearchProvider
 from .base import SearchProvider
 from .semantic_scholar import SemanticScholarProvider
@@ -19,11 +19,8 @@ logger = logging.getLogger(__name__)
 # URL / ID helpers
 # ---------------------------------------------------------------------------
 
-def _normalize_url(url: str) -> str:
-    """Normalize a URL for dedup comparisons."""
-    url = url.rstrip("/")
-    url = re.sub(r"^https?://(www\.)?", "", url)
-    return url.lower()
+# _normalize_url is imported from deep_research.urls (shared with the
+# pipelines' seen/known-URL filtering and the analyzed_urls storage keys).
 
 
 def _extract_arxiv_id(result: SearchResult) -> str:

@@ -199,6 +199,9 @@ async def aextract_data(
     async with _get_semaphore():
         prompt = EXTRACT_DATA_PROMPT.format(query=query, title=title, content=content)
         data = await achat_json(prompt, model=model)
+        if not isinstance(data, dict):
+            # achat_json may return a top-level list; treat as no data.
+            data = {}
     return ExtractedData(
         statistics=data.get("statistics", []),
         entities=data.get("entities", []),
@@ -220,6 +223,9 @@ async def aanalyze_source(
     async with _get_semaphore():
         prompt = ANALYZE_PROMPT.format(query=query, url=url, title=title, content=content)
         data = await achat_json(prompt, thinking=thinking, model=model)
+        if not isinstance(data, dict):
+            # achat_json may return a top-level list; treat as no findings.
+            data = {}
 
     summary = await asummarize_source(query, title, content, model=model)
 

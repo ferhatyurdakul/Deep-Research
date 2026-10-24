@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime
 
 from deep_research.config import DB_PATH
+from deep_research.urls import normalize_url
 from deep_research.models import (
     ContentDepth,
     EvidencedFinding,
@@ -145,7 +146,9 @@ def save_report(
                    ON CONFLICT(url) DO UPDATE SET
                        last_seen = excluded.last_seen,
                        times_seen = times_seen + 1""",
-                (source.url, source.title, now, now),
+                # Normalized key so scheme/www variants of the same page
+                # collapse into one row instead of duplicating the registry.
+                (normalize_url(source.url), source.title, now, now),
             )
 
         conn.commit()
@@ -269,7 +272,11 @@ def fork_session(session_id: int, new_query: str | None = None) -> int | None:
         depth_row = conn.execute(
             "SELECT depth FROM research_sessions WHERE id = ?", (session_id,)
         ).fetchone()
-    depth = depth_row["depth"] if depth_row else "standard"
+    if depth_row is None:
+        # Source vanished between load_report() and this read — don't
+        # fabricate a fork with a defaulted depth.
+        return None
+    depth = depth_row["depth"]
 
     return save_report(fork, depth=depth, parent_session_id=session_id)
 
@@ -278,12 +285,20 @@ def get_known_urls() -> set[str]:
     init_db()
     with _get_conn() as conn:
         rows = conn.execute("SELECT url FROM analyzed_urls").fetchall()
-        return {r["url"] for r in rows}
+        # Normalize on read too, so rows written before normalization existed
+        # still compare equal against normalized candidates.
+        return {normalize_url(r["url"]) for r in rows}
 
 
 def delete_session(session_id: int) -> bool:
     init_db()
     with _get_conn() as conn:
+        # Orphaned lineage is worse than no lineage: null the parent pointer
+        # on children so --history / list_sessions never show a dead parent id.
+        conn.execute(
+            "UPDATE research_sessions SET parent_session_id = NULL WHERE parent_session_id = ?",
+            (session_id,),
+        )
         conn.execute("DELETE FROM sources WHERE session_id = ?", (session_id,))
         cursor = conn.execute("DELETE FROM research_sessions WHERE id = ?", (session_id,))
         conn.commit()

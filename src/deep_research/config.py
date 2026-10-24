@@ -128,18 +128,19 @@ class Settings(BaseModel):
     tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
     semantic_scholar_api_key: str = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
     default_depth: str = os.getenv("RESEARCH_DEPTH", "standard")
-    max_sub_questions: int = 5
-    max_search_results: int = 5
-    max_scrape_pages: int = 3
+    # (Depth/shape defaults live on ResearchConfig.from_depth presets; only
+    # the *_override fields below are consumed here.)
 
     # --- Concurrency & budget knobs -------------------------------------
-    # These cap how bursty a run is. Lower them when a provider rate-limits
-    # (e.g. Z.AI/GLM 429s) during deep/agent research.
+    # These cap how bursty a run is.
     #
     # Concurrent in-flight LLM calls during source analysis. The analyzer
     # fans out one analyze (+summary +extract) chain per source; this is the
-    # ceiling on how many run at once.
-    max_llm_concurrency: int = _int_env("MAX_LLM_CONCURRENCY", 5)
+    # ceiling on how many run at once. Default 2: the default provider (Z.AI
+    # GLM coding plan) enforces a low per-plan concurrency cap that surfaces
+    # as 429s, so a wider fan-out mostly generates retries. Raise it (3-5)
+    # only on providers with real headroom.
+    max_llm_concurrency: int = _int_env("MAX_LLM_CONCURRENCY", 2)
     # Gentler default applied in --agent mode, which issues extra
     # decision/gap calls on top of analysis. Capped by max_llm_concurrency.
     agent_max_llm_concurrency: int = _int_env("AGENT_MAX_LLM_CONCURRENCY", 3)
@@ -148,9 +149,9 @@ class Settings(BaseModel):
 
     # Retry/backoff for transient and rate-limit errors. Rate limits get a
     # longer base wait (see llm._wait_strategy); jitter is always applied.
-    llm_max_retries: int = _int_env("LLM_MAX_RETRIES", 5)
-    llm_retry_base_seconds: float = _float_env("LLM_RETRY_BASE_SECONDS", 2.0)
-    llm_retry_max_seconds: float = _float_env("LLM_RETRY_MAX_SECONDS", 60.0)
+    llm_max_retries: int = max(1, _int_env("LLM_MAX_RETRIES", 5))
+    llm_retry_base_seconds: float = max(0.0, _float_env("LLM_RETRY_BASE_SECONDS", 2.0))
+    llm_retry_max_seconds: float = max(0.0, _float_env("LLM_RETRY_MAX_SECONDS", 60.0))
 
     # Optional research-shape overrides. 0 / unset = use the --depth preset.
     max_sub_questions_override: int = _int_env("MAX_SUB_QUESTIONS", 0)
@@ -185,7 +186,11 @@ class Settings(BaseModel):
     @property
     def active_provider(self) -> str:
         if self.llm_provider not in _PROVIDER_PROTOCOLS:
-            raise ValueError(
+            # CapabilityViolation (a ValueError subclass) so every existing
+            # catch site — check_config, the REPL, resynthesize — handles a
+            # typo'd provider uniformly instead of some leaking a traceback.
+            from .capabilities import CapabilityViolation
+            raise CapabilityViolation(
                 f"Unknown LLM_PROVIDER '{self.llm_provider}'. "
                 f"Supported: {', '.join(_PROVIDER_PROTOCOLS)}"
             )
@@ -193,10 +198,12 @@ class Settings(BaseModel):
 
     @property
     def active_endpoint_family(self) -> str:
+        from .capabilities import CapabilityViolation
+
         supported = _PROVIDER_PROTOCOLS[self.active_provider]
         if self.llm_endpoint_family:
             if self.llm_endpoint_family not in supported:
-                raise ValueError(
+                raise CapabilityViolation(
                     f"Provider '{self.active_provider}' does not support endpoint family "
                     f"'{self.llm_endpoint_family}'. Supported: {', '.join(supported)}"
                 )
@@ -350,6 +357,15 @@ class Settings(BaseModel):
             describe_route, resolve_endpoint_family, validate_route,
         )
 
+        # A typo'd LLM_FALLBACK_PROVIDER would otherwise surface as a
+        # CapabilityViolation mid-429-recovery, exactly when the fallback is
+        # supposed to save the run. Reject it at startup instead.
+        if self.llm_fallback_provider and self.llm_fallback_provider not in _PROVIDER_PROTOCOLS:
+            from .capabilities import CapabilityViolation
+            raise CapabilityViolation(
+                f"Unknown LLM_FALLBACK_PROVIDER '{self.llm_fallback_provider}'. "
+                f"Supported: {', '.join(_PROVIDER_PROTOCOLS)}"
+            )
         provider = self.active_provider
         family = resolve_endpoint_family(
             provider, self.active_model, self.llm_endpoint_family or None,
