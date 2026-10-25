@@ -11,9 +11,11 @@ from __future__ import annotations
 from getpass import getpass
 from typing import Iterable, Optional
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Confirm, Prompt
+from rich import box
+from rich.markup import escape
+from rich.prompt import Confirm
+from rich.table import Table
+from rich.text import Text
 
 from .credentials import (
     MANAGED_KEYS,
@@ -23,11 +25,10 @@ from .credentials import (
     list_credentials,
     set_credential,
 )
+from .ui import console, fail, glyph, note, ok, panel, warn
 
-console = Console()
 
-
-def _prompt_secret(label: str, current_set: bool) -> Optional[str]:
+def _prompt_secret(label: str, current_set: bool, step: str = "") -> Optional[str]:
     """
     Prompt for a secret without echoing it to the terminal.
 
@@ -36,9 +37,10 @@ def _prompt_secret(label: str, current_set: bool) -> Optional[str]:
       - "" if the user explicitly wants to clear it ("-" sentinel),
       - None if the user pressed Enter to keep the existing value.
     """
-    hint = "  [dim]press Enter to keep existing, '-' to clear[/dim]" if current_set else "  [dim]press Enter to skip[/dim]"
-    console.print(f"\n  [bold]{label}[/bold]" + (" [green](currently set)[/green]" if current_set else ""))
-    console.print(hint)
+    status = f"  [ok]{glyph('on')} set[/ok]" if current_set else f"  [muted]{glyph('off')} not set[/muted]"
+    console.print(f"\n[muted]{step}[/muted] [bold]{escape(label)}[/bold]{status}")
+    note("  Enter to keep the current value, '-' to clear it." if current_set
+         else "  Enter to skip.")
     raw = getpass("  > ")
     if raw == "":
         return None
@@ -49,14 +51,19 @@ def _prompt_secret(label: str, current_set: bool) -> Optional[str]:
 
 def _show_current_state() -> None:
     state = list_credentials()
-    console.print(Panel(
-        "\n".join(
-            f"  {key:30} {'[green]set[/green]' if is_set else '[dim]not set[/dim]'}"
-            for key, is_set in state.items()
-        ) + f"\n\n  [dim]keyring backend: {keyring_backend_name()}[/dim]",
-        title="Stored credentials",
-        border_style="cyan",
-    ))
+    table = Table(box=box.SIMPLE_HEAD, header_style="muted", pad_edge=False)
+    table.add_column("Key", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("For")
+    for env_name, label, required in MANAGED_KEYS:
+        is_set = state.get(env_name, False)
+        status = Text(f"{glyph('on')} set", style="ok") if is_set else Text(f"{glyph('off')} not set", style="muted")
+        purpose = Text(label)
+        if required and not is_set:
+            purpose.append("  (needed for the default provider)", style="warn")
+        table.add_row(Text(env_name, style="cmd"), status, purpose)
+    console.print(panel(table, title="Stored credentials"))
+    note(f"Stored in your OS keyring ({keyring_backend_name()}). Values are never displayed.")
 
 
 def run_setup_wizard(keys: Optional[Iterable[str]] = None) -> None:
@@ -66,41 +73,40 @@ def run_setup_wizard(keys: Optional[Iterable[str]] = None) -> None:
     By default prompts for every managed key. Pass `keys` to limit the
     wizard to a subset (e.g. ["ZAI_API_KEY"] from /login ZAI_API_KEY).
     """
-    console.print(Panel(
-        "[bold]Deep Research credential setup[/bold]\n"
-        "[dim]Keys are stored in your OS keyring (Keychain on macOS, "
-        "Secret Service on Linux, Credential Manager on Windows).[/dim]",
-        border_style="blue",
+    console.print()
+    console.print(panel(
+        "Store API keys in your OS keyring (Keychain on macOS, Secret Service on Linux,\n"
+        "Credential Manager on Windows) instead of a plain-text .env file.",
+        title=f"{glyph('mark')} Credential setup",
     ))
     _show_current_state()
 
     target_keys = set(keys) if keys else {k for k, _, _ in MANAGED_KEYS}
+    todo = [(k, label) for k, label, _ in MANAGED_KEYS if k in target_keys]
     updated: list[str] = []
     cleared: list[str] = []
 
-    for env_name, label, _required in MANAGED_KEYS:
-        if env_name not in target_keys:
-            continue
+    for i, (env_name, label) in enumerate(todo, 1):
         currently = bool(get_credential(env_name))
-        value = _prompt_secret(f"{label} ({env_name})", currently)
+        step = f"[{i}/{len(todo)}]" if len(todo) > 1 else ""
+        value = _prompt_secret(f"{label} ({env_name})", currently, step)
         if value is None:
             continue
         if value == "":
             if delete_credential(env_name):
                 cleared.append(env_name)
-                console.print(f"  [yellow]Cleared {env_name}.[/yellow]")
+                warn(f"Cleared {env_name}.")
             continue
         try:
             set_credential(env_name, value)
             updated.append(env_name)
-            console.print(f"  [green]Saved {env_name}.[/green]")
+            ok(f"Saved {env_name}.")
         except Exception as e:
-            console.print(f"  [red]Could not store {env_name}: {e}[/red]")
+            fail(f"Could not store {env_name}: {escape(str(e))}")
 
     if updated or cleared:
-        console.print(
-            f"\n[green]Done.[/green] Updated: {len(updated)}; cleared: {len(cleared)}."
-        )
+        console.print()
+        ok(f"Done. Updated {len(updated)}, cleared {len(cleared)}.")
         # Hand the active settings object a chance to re-read so the running
         # process sees the new credentials immediately.
         try:
@@ -109,7 +115,8 @@ def run_setup_wizard(keys: Optional[Iterable[str]] = None) -> None:
         except Exception:
             pass
     else:
-        console.print("\n[dim]No changes.[/dim]")
+        console.print()
+        note("No changes.")
 
 
 def run_login(key_name: Optional[str] = None) -> None:
@@ -123,9 +130,9 @@ def run_login(key_name: Optional[str] = None) -> None:
         from .config import settings
         key_name = settings.active_api_key_env_name
     if key_name not in [k for k, _, _ in MANAGED_KEYS]:
-        console.print(
-            f"[red]Unknown credential {key_name!r}.[/red] "
-            f"Valid keys: {', '.join(k for k, _, _ in MANAGED_KEYS)}"
+        fail(
+            f"Unknown credential {escape(repr(key_name))}.",
+            hint=f"Valid keys: {', '.join(k for k, _, _ in MANAGED_KEYS)}",
         )
         return
     run_setup_wizard(keys=[key_name])
@@ -145,13 +152,12 @@ def run_logout(key_name: Optional[str] = None) -> None:
             try:
                 key_name = settings.active_api_key_env_name
             except Exception as e:
-                console.print(f"  [red]Cannot resolve the active provider: {e}[/red]")
+                fail(f"Cannot resolve the active provider: {escape(str(e))}")
                 return
         if key_name not in [k for k, _, _ in MANAGED_KEYS]:
-            console.print(
-                f"[red]Unknown credential {key_name!r}.[/red] "
-                f"Use 'all' to clear everything, or one of: "
-                f"{', '.join(k for k, _, _ in MANAGED_KEYS)}"
+            fail(
+                f"Unknown credential {escape(repr(key_name))}.",
+                hint=f"Use 'all' to clear everything, or one of: {', '.join(k for k, _, _ in MANAGED_KEYS)}",
             )
             return
         targets = [key_name]
@@ -167,8 +173,9 @@ def run_logout(key_name: Optional[str] = None) -> None:
     for k in targets:
         if delete_credential(k):
             cleared += 1
-            console.print(f"  [yellow]Cleared {k}.[/yellow]")
-    console.print(f"\n[green]Done.[/green] Cleared {cleared}/{len(targets)}.")
+            warn(f"Cleared {k}.")
+    console.print()
+    ok(f"Done. Cleared {cleared}/{len(targets)}.")
     try:
         from .config import settings
         settings.reload_credentials()

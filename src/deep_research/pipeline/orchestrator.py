@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from rich.console import Console
-from rich.panel import Panel
+from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from deep_research.config import settings
+from deep_research.ui import bullets, console, numbered, ok as ui_ok, panel as ui_panel
 from deep_research.extraction.parser import ContentParser
 from deep_research.models import (
     ContentDepth,
@@ -29,7 +29,6 @@ from .synthesizer import asynthesize_report_safe
 from .templates import get_template
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 
 def _build_aggregator(config: ResearchConfig) -> SearchAggregator:
@@ -199,19 +198,13 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
             )
         progress.update(task, completed=True, description="[green]Decomposed into sub-questions")
 
-        console.print(
-            Panel(
-                "\n".join(f"  {i+1}. {sq.question}" for i, sq in enumerate(report.sub_questions)),
-                title="[bold]Sub-Questions",
-                border_style="cyan",
-            )
-        )
+        console.print(ui_panel(numbered([sq.question for sq in report.sub_questions]), title="Sub-questions"))
 
         # Iteration loop. If an iteration fails after sources were already
         # collected (e.g. a 429 that outlives the retry budget), stop the loop
         # and synthesize from what exists — the session is saved and
-        # --continue-session can resume it. With nothing collected there is no
-        # partial result worth saving, so the error propagates.
+        # `deep-research continue <id>` can resume it. With nothing collected
+        # there is no partial result worth saving, so the error propagates.
         for iteration_num in range(1, config.max_iterations + 1):
             try:
                 iteration = ResearchIteration(iteration_number=iteration_num)
@@ -232,17 +225,14 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
                     progress.update(task, completed=True, description="[green]Gap analysis complete")
 
                     if is_sufficient or not gaps:
-                        console.print("[green]  Research coverage is sufficient.[/green]")
+                        ui_ok("Research coverage is sufficient.")
                         report.iterations.append(iteration)
                         break
 
-                    console.print(
-                        Panel(
-                            "\n".join(f"  - {g.gap_description}" for g in gaps),
-                            title=f"[bold yellow]Iteration {iteration_num}: Filling Knowledge Gaps",
-                            border_style="yellow",
-                        )
-                    )
+                    console.print(ui_panel(
+                        bullets([g.gap_description for g in gaps]),
+                        title=f"Iteration {iteration_num}: filling knowledge gaps", border="yellow",
+                    ))
                     queries_to_search = [g.suggested_query for g in gaps]
 
                 all_searched_queries.extend(queries_to_search)
@@ -261,8 +251,8 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
                 logger.warning("Iteration %d aborted: %r", iteration_num, e)
                 console.print(
                     f"\n[yellow]Iteration {iteration_num} failed after {len(report.sources)} "
-                    f"sources were collected: {e}\nContinuing to synthesis — the session "
-                    "will be saved; re-run with --continue-session <id> to resume research.[/yellow]"
+                    f"sources were collected: {escape(str(e))}\nContinuing to synthesis — the session "
+                    "will be saved; re-run with `deep-research continue <id>` to resume research.[/yellow]"
                 )
                 break
 
@@ -301,7 +291,7 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
     if not ok and report.sources:
         console.print(
             f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
-            "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
+            "The session will be saved; re-run with `deep-research resynthesize <id>` to retry just synthesis.[/yellow]"
         )
     console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report
@@ -368,17 +358,14 @@ async def acontinue_research(
                 progress.update(task, completed=True, description="[green]Gap analysis complete")
 
                 if is_sufficient or not gaps:
-                    console.print("[green]  Research coverage is sufficient.[/green]")
+                    ui_ok("Research coverage is sufficient.")
                     report.iterations.append(iteration)
                     break
 
-                console.print(
-                    Panel(
-                        "\n".join(f"  - {g.gap_description}" for g in gaps),
-                        title=f"[bold yellow]Iteration {actual_num}: Filling Knowledge Gaps",
-                        border_style="yellow",
-                    )
-                )
+                console.print(ui_panel(
+                    bullets([g.gap_description for g in gaps]),
+                    title=f"Iteration {actual_num}: filling knowledge gaps", border="yellow",
+                ))
                 queries_to_search = [g.suggested_query for g in gaps]
                 all_searched_queries.extend(queries_to_search)
 
@@ -396,9 +383,9 @@ async def acontinue_research(
                 logger.warning("Continuation iteration %d aborted: %r", iteration_num, e)
                 console.print(
                     f"\n[yellow]Iteration {len(report.iterations) + 1} failed after "
-                    f"{len(report.sources)} sources were collected: {e}\nContinuing to "
+                    f"{len(report.sources)} sources were collected: {escape(str(e))}\nContinuing to "
                     "synthesis — the session will be saved; re-run with "
-                    "--continue-session <id> to resume research.[/yellow]"
+                    "`deep-research continue <id>` to resume research.[/yellow]"
                 )
                 break
 
@@ -426,7 +413,7 @@ async def acontinue_research(
     if not ok and report.sources:
         console.print(
             f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
-            "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
+            "The session will be saved; re-run with `deep-research resynthesize <id>` to retry just synthesis.[/yellow]"
         )
     console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report

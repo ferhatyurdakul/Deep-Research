@@ -43,7 +43,10 @@ class ResearchConfig(BaseModel):
     # Concurrency ceilings, populated from settings by apply_limits().
     max_llm_concurrency: int = 2
     max_search_concurrency: int = 5
-    use_thinking: bool = False
+    # Thinking is on by default: every registered model either supports the
+    # payload (GLM), reasons natively (Kimi/DeepSeek — payload omitted), or
+    # is gated off per-model by capabilities.resolve_thinking.
+    use_thinking: bool = True
     use_academic_search: bool = False
     use_extraction: bool = False
     template: Optional[str] = None  # template key from templates.py
@@ -55,15 +58,15 @@ class ResearchConfig(BaseModel):
         presets = {
             ResearchDepth.QUICK: dict(
                 max_sub_questions=3, max_search_results=3,
-                max_scrape_pages=2, max_iterations=1, use_thinking=False,
+                max_scrape_pages=2, max_iterations=1,
             ),
             ResearchDepth.STANDARD: dict(
                 max_sub_questions=5, max_search_results=5,
-                max_scrape_pages=3, max_iterations=2, use_thinking=False,
+                max_scrape_pages=3, max_iterations=2,
             ),
             ResearchDepth.DEEP: dict(
                 max_sub_questions=7, max_search_results=7,
-                max_scrape_pages=5, max_iterations=3, use_thinking=True,
+                max_scrape_pages=5, max_iterations=3,
                 use_academic_search=True, use_extraction=True,
             ),
         }

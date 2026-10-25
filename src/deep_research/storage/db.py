@@ -248,7 +248,7 @@ def fork_session(session_id: int, new_query: str | None = None) -> int | None:
 
     The copy is a point-in-time snapshot — it has all the same sources, sub-questions,
     iterations, summaries, and searched URLs. The user can then refine the fork
-    (e.g. via --continue-session) without touching the original.
+    (e.g. via `deep-research continue <id>`) without touching the original.
 
     Returns the new session ID, or None if the source session doesn't exist.
     """

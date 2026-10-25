@@ -419,7 +419,7 @@ class TestModels:
         quick = ResearchConfig.from_depth(ResearchDepth.QUICK)
         assert quick.max_sub_questions == 3
         assert quick.max_iterations == 1
-        assert quick.use_thinking is False
+        assert quick.use_thinking is True  # thinking is on at every depth
 
         deep = ResearchConfig.from_depth(ResearchDepth.DEEP)
         assert deep.max_sub_questions == 7
@@ -793,15 +793,39 @@ class TestSessionForking:
         assert child is not None
         assert child.parent_session_id is None  # cleared, not dangling
 
-    def test_fork_query_without_fork_session_errors(self):
+    def test_old_session_flags_are_gone(self):
+        """Breaking change: session management moved to subcommands, so the
+        legacy flags must be rejected by argparse."""
         import subprocess
 
+        for legacy in ("--history", "--inspect 3", "--delete 3", "--fork-session 3"):
+            result = subprocess.run(
+                [sys.executable, "-m", "deep_research.main", *legacy.split()],
+                capture_output=True, text=True, timeout=60,
+            )
+            assert result.returncode == 2, legacy  # argparse: unrecognized
+
+    def test_history_subcommand_empty_db(self, tmp_path):
+        import subprocess
+
+        env = {**os.environ, "XDG_DATA_HOME": str(tmp_path)}
         result = subprocess.run(
-            [sys.executable, "-m", "deep_research.main", "--fork-query", "x"],
-            capture_output=True, text=True, timeout=60,
+            [sys.executable, "-m", "deep_research.main", "history"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        assert result.returncode == 0
+        assert "No research sessions found" in result.stdout
+
+    def test_fork_subcommand_missing_session(self, tmp_path):
+        import subprocess
+
+        env = {**os.environ, "XDG_DATA_HOME": str(tmp_path)}
+        result = subprocess.run(
+            [sys.executable, "-m", "deep_research.main", "fork", "999", "new query"],
+            capture_output=True, text=True, timeout=60, env=env,
         )
         assert result.returncode == 1
-        assert "--fork-query requires --fork-session" in (result.stdout + result.stderr)
+        assert "not found" in result.stdout
 
 
 # --- Report formatting ---

@@ -1,5 +1,51 @@
 # Changelog
 
+
+## Unreleased
+
+### Changed — default model is now `glm-5.3`
+
+- `glm-5.3` is registered for Z.AI (OpenAI-compatible endpoint, `zai-extra-body` thinking, production tier) and replaces `glm-5.1` / `glm-5` as the default: `GLM_MODEL` now defaults to `glm-5.3`, and the Z.AI route profiles use it wherever they used `glm-5.1` (`balanced`: analyze/gap/synthesize; `budget`: gap/synthesize; `quality`: every stage). `glm-4.5-air` still handles the cheap stages of `balanced` and `budget`. OpenCode Go defaults are unchanged. A `GLM_MODEL` or `MODEL_*` you have set yourself keeps winning.
+
+### Changed — CLI redesign
+
+- **One look everywhere.** A shared theme and console (`ui.py`) replace the five separate `Console()` instances and ad-hoc colors: the same ✓ / ✗ / ! lines, titled panels, section rules and key-value grids across one-shot runs, the REPL, the setup wizard and the pipeline's own output. Glyphs fall back to ASCII on non-UTF-8 terminals; colors follow `NO_COLOR` and disappear when piped.
+- **Discoverable options.** `deep-research --help` is now a grouped reference — usage, every research option with what each value means (`quick` = 3 sub-questions / 1 pass, …), all commands by group, and examples — instead of the bare argparse listing that omitted every subcommand. `deep-research COMMAND --help` details one command; `deep-research help [COMMAND]` and `--version` are new. Usage errors print the problem, the command's usage line, and a pointer to `--help`.
+- **Shared screens.** `history`, `inspect`, banner and run summary now render through `views.py`, so the CLI and the REPL show identical screens (the REPL's `/inspect` used to be a cut-down copy and now supports `--full` and `--source N`). History shows fork lineage and truncates to the terminal width.
+- **Run summary.** A finished run ends with a "Saved" card (session ID, report path, source/iteration count, elapsed time, next-step commands) instead of two loose lines. Follow-up questions are numbered so the "enter a number" prompt matches what is on screen. The one-shot banner carries the resolved model, search backend, run shape and the query, replacing the raw route-dict dump.
+- **REPL.** `/help` is grouped and shows each setting's allowed values; `/help <command>` explains one. A setting command with options is an interactive picker: `/depth⏎` (also `/style`, `/template`, `/provider`, `/route`) opens an arrow-key list with each value's meaning and the current one marked — ↑/↓ or j/k to move, Enter to select, 1-9 to jump, Esc to cancel. Outside a terminal (pipes, scripts) the same command prints the list instead. Tab-completion now completes values after the command (`/depth ` → quick, standard, deep), the menu scrolls with the selection so all commands are reachable, aliases (`/q`, `/exit`, `/?`) stay out of the bare-`/` menu, and an empty input box shows a hint. Mistyped commands suggest the closest match. `/fresh`'s description is corrected (it revisits past URLs). Only a submitted research question leaves its input box in the scrollback (it records what was asked and under which settings); slash commands, empty Enters and quitting erase theirs, so changing settings no longer stacks up boxes.
+- **Quieter, cleaner logs.** The CLI logs warnings and errors only by default (the INFO stream was per-call route dicts and result counts interleaved with the UI); `DEEP_RESEARCH_LOG_LEVEL=INFO|DEBUG` restores them. Log lines now print through the shared console, so they appear above a live progress spinner instead of tearing it, and message text is never interpreted as markup. The eval runner keeps its existing stderr format.
+- **REPL credential check.** A query with no API key configured now stops with `✗ ZAI_API_KEY is not set` and a pointer to `/setup` and `/status`, instead of starting a run that dies with an SDK "missing credentials" error naming the wrong provider.
+- **Faster startup for non-research commands.** The LLM and search client stack is imported only when a run starts, so `--help`, `history`, `inspect`, `status` and the REPL banner no longer pay ~1.5s of import time (`deep_research.pipeline` re-exports are now lazy).
+
+### Fixed (REPL display)
+
+- **Academic sources are shown when implied.** The `science` and `literature` templates and `deep` depth switch academic search on inside the pipeline, but the status line, banner and `/status` only reflected the explicit `/academic` switch, so it looked like academic search was off. They now show `academic` whenever a run will use it (and `/status` names the reason); turning the switch off under such a template says it is still searched.
+
+### Added
+
+- **`/model`** — change the model per pipeline stage from the REPL without editing `.env`: `/model` opens a stage picker then a model picker (the provider's registered models, default first, plus `default` to return to the route profile); `/model analyze glm-5.1` and `/model all glm-5.3` work typed, with Tab-completion for both arguments. Session-only; unregistered names are accepted with a warning, models registered only for another provider are refused, and an invalid combination rolls back.
+- **Slash commands leave nothing behind.** Setting commands are silent on success (the status line shows the new state); read-only screens (`/help`, `/status`, `/history`, `/inspect`, `/keys`, `/fork`) and any error open in a closable, scrollable viewer that disappears on Enter, Esc or `q`; `/delete <id>` confirms with a Yes/No picker instead of a typed prompt (`/delete <id> --yes` skips it). Runs and credential wizards still print normally. Outside a terminal (pipes, scripts) every command prints as before.
+- The banner's model line shows what each stage actually uses (`glm-5.3 · glm-4.5-air for decompose`) instead of only `GLM_MODEL`, which could disagree with the route profile.
+- `deep-research status` — resolved provider, route profile and per-stage models, which credentials are set, and where the session DB and reports live.
+- `deep-research history -n N` to choose how many sessions to list.
+
+### Fixed
+
+- **REPL: finished research crashed before saving.** `repl.py` called an unimported `db_save`, so every completed query or `/continue` in the REPL raised `NameError` after the report was displayed and before the session was stored.
+- **REPL: `/style` had no effect.** `ReplState.to_config()` stopped copying the style into the research config; reports always came out in the default style.
+- **Markup injection in messages.** Queries, session text, exception messages and LLM-written agent reasoning were interpolated into rich markup strings; text such as `[/foo]` could raise `MarkupError` mid-run. All user- and model-supplied text is now escaped or rendered as plain text.
+- The credentials flow in non-interactive shells no longer blocks on a confirmation prompt when a key is missing; it prints how to configure one and exits.
+
+### Breaking
+
+- **Session management moved from flags to subcommands**: `deep-research history`, `delete <ID>`, `inspect <ID> [--full] [--source N]`, `fork <ID> [query...]`, `continue <ID> [shape flags]`, `resynthesize <ID> [shape flags]`. The old `--history`, `--delete`, `--inspect`, `--full`, `--source`, `--fork-session`, `--fork-query`, `--continue-session`, and `--resynthesize` flags are rejected by argparse. `continue` and `resynthesize` accept the same shape flags as one-shot runs and run the same config gate (key check / route validation) as a research run. In-run hint messages updated to the new syntax.
+- **Thinking mode is always on** and the `--thinking` flag is removed. Every registered model either supports the thinking payload (GLM via `zai-extra-body`), reasons natively with the payload omitted (Kimi, DeepSeek, MiMo, Qwen — dialect `none`), or is auto-gated off (`glm-4.5-air`). (The REPL `/thinking` command was removed along with the flag.)
+
+### Added
+
+- **Interactive REPL UI** (prompt_toolkit): a Claude-Code-style rounded input box whose top border carries a colored, minimal run state (depth, template, non-default style, active toggles, provider/route — defaults are silent); typing `/` opens a fuzzy completion menu *below* the box with each command's usage and description, and plain queries never trigger it; persistent history with ↑/↓ and Ctrl-R; first Ctrl-C clears the input line. Non-tty stdin (pipes, scripts, tests) automatically falls back to the plain prompt. The `/thinking` command is gone along with the flag — thinking is always on.
+
 ## v0.4.0 — 2026-10-24
 
 ### Added

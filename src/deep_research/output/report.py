@@ -3,16 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
+from rich.style import Style
+from rich.table import Table
+from rich.text import Text
 
 from deep_research.config import OUTPUTS_DIR
 from deep_research.models import ResearchReport
+from deep_research.ui import console, numbered, panel, section
 
 from .citations import format_citation
-
-console = Console()
 
 
 def format_report_markdown(report: ResearchReport) -> str:
@@ -110,22 +110,23 @@ def save_report(report: ResearchReport) -> Path:
 
 def display_report(report: ResearchReport) -> None:
     console.print()
-    console.print(Panel("[bold green]Research Complete!", border_style="green"))
-    console.print()
-
-    console.print(Panel(Markdown(report.executive_summary), title="[bold]Executive Summary", border_style="blue"))
+    console.print(panel(Markdown(report.executive_summary), title="Executive summary"))
     console.print()
 
     console.print(Markdown(report.detailed_findings))
-    console.print()
 
-    console.print("[bold]References:[/bold]")
+    section("References")
+    refs = Table.grid(padding=(0, 1))
+    refs.add_column(justify="right", style="muted", no_wrap=True)
+    refs.add_column()
     for i, source in enumerate(report.sources, 1):
-        console.print(f"  [{i}] [link={source.url}]{source.title}[/link] [dim]({source.relevance})[/dim]")
-    console.print()
+        line = Text()
+        line.append(source.title, style=Style(link=source.url))
+        if source.relevance:
+            line.append(f"  {source.relevance}", style="muted")
+        refs.add_row(f"[{i}]", line)
+    console.print(refs)
 
     if report.follow_up_questions:
-        console.print("[bold]Follow-up Questions:[/bold]")
-        for q in report.follow_up_questions:
-            console.print(f"  - {q}")
-        console.print()
+        section("Follow-up questions")
+        console.print(numbered(report.follow_up_questions))

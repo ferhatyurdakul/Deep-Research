@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from rich.console import Console
-from rich.panel import Panel
+from rich.console import Group
+from rich.markup import escape
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.text import Text
 
 from deep_research.config import settings
 from deep_research.extraction.parser import ContentParser
+from deep_research.ui import console, glyph, kv_grid, numbered, panel as ui_panel
 from deep_research.llm import achat_json
 from deep_research.models import (
     ContentDepth,
@@ -31,7 +33,6 @@ from .synthesizer import asynthesize_report_safe
 from .templates import get_template
 
 logger = logging.getLogger(__name__)
-console = Console()
 
 MAX_AGENT_ITERATIONS = 8
 
@@ -252,13 +253,7 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
             )
         progress.update(task, completed=True, description="[green]Decomposed into sub-questions")
 
-        console.print(
-            Panel(
-                "\n".join(f"  {i+1}. {sq.question}" for i, sq in enumerate(report.sub_questions)),
-                title="[bold]Sub-Questions",
-                border_style="cyan",
-            )
-        )
+        console.print(ui_panel(numbered([sq.question for sq in report.sub_questions]), title="Sub-questions"))
 
         # Initial search
         queries_to_search = [sq.question for sq in report.sub_questions]
@@ -327,13 +322,10 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
                 progress.update(task, completed=True, description=f"[green]Agent decided: {action}")
 
                 if action == "sufficient":
-                    console.print(
-                        Panel(
-                            f"[green]{reasoning}[/green]\n[dim]Confidence: {confidence:.0%}[/dim]",
-                            title="[bold green]Agent: Research Sufficient",
-                            border_style="green",
-                        )
-                    )
+                    console.print(ui_panel(
+                        Group(Text(str(reasoning)), Text(f"Confidence: {confidence:.0%}", style="muted")),
+                        title=f"{glyph('ok')} Agent: research sufficient", border="green",
+                    ))
                     break
 
                 action_labels = {
@@ -342,15 +334,15 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
                     "broaden": "Broadening perspective",
                 }
                 label = action_labels.get(action, action)
-                console.print(
-                    Panel(
-                        f"[yellow]{reasoning}[/yellow]\n"
-                        f"[dim]Focus: {focus} | Confidence: {confidence:.0%}[/dim]\n"
-                        f"Queries: {', '.join(new_queries)}",
-                        title=f"[bold yellow]Agent: {label} (iteration {iter_num})",
-                        border_style="yellow",
-                    )
-                )
+                console.print(ui_panel(
+                    kv_grid([
+                        ("why", Text(str(reasoning))),
+                        ("focus", Text(str(focus))),
+                        ("confidence", Text(f"{confidence:.0%}")),
+                        ("queries", Text(", ".join(new_queries))),
+                    ]),
+                    title=f"Agent: {escape(str(label))} (iteration {iter_num})", border="yellow",
+                ))
 
                 if not new_queries:
                     break
@@ -385,9 +377,9 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
                 logger.warning("Agent iteration %d aborted: %r", iter_num, e)
                 console.print(
                     f"\n[yellow]Agent iteration {iter_num} failed after "
-                    f"{len(report.sources)} sources were collected: {e}\nContinuing to "
+                    f"{len(report.sources)} sources were collected: {escape(str(e))}\nContinuing to "
                     "synthesis — the session will be saved; re-run with "
-                    "--continue-session <id> to resume research.[/yellow]"
+                    "`deep-research continue <id>` to resume research.[/yellow]"
                 )
                 break
 
@@ -424,7 +416,7 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
     if not ok and report.sources:
         console.print(
             f"\n[yellow]Synthesis did not complete ({len(report.sources)} sources collected). "
-            "The session will be saved; re-run with --resynthesize <id> to retry just synthesis.[/yellow]"
+            "The session will be saved; re-run with `deep-research resynthesize <id>` to retry just synthesis.[/yellow]"
         )
     console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
     return report

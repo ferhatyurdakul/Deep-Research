@@ -64,7 +64,7 @@ class TestOutputsDir:
         assert cfg.OUTPUTS_DIR == tmp_path / "outputs"
 
     def test_not_created_at_import(self, tmp_path, monkeypatch):
-        # Critical: bare CLI invocations (e.g. `deep-research --history`)
+        # Critical: bare CLI invocations (e.g. `deep-research history`)
         # in random directories must NOT leave empty `outputs/` dirs behind.
         monkeypatch.delenv("DEEP_RESEARCH_OUTPUTS_DIR", raising=False)
         monkeypatch.chdir(tmp_path)

@@ -89,6 +89,16 @@ def _register(cap: ModelCapability) -> None:
 # --- Z.AI ---
 # Existing models the project has been running on. Endpoint family is openai-only
 # because Z.AI's coding paas v4 is the OpenAI-compatible endpoint.
+# glm-5.3: current default. Same OpenAI-compatible endpoint and thinking payload
+# as the other GLM-5.x entries; registered with that family's capabilities.
+_register(ModelCapability(
+    provider="zai", model_id="glm-5.3",
+    endpoint_families=frozenset({"openai"}),
+    thinking_supported=True,
+    thinking_dialect="zai-extra-body",
+    tier="production",
+    notes="Default model",
+))
 _register(ModelCapability(
     provider="zai", model_id="glm-5",
     endpoint_families=frozenset({"openai"}),
@@ -189,28 +199,27 @@ class StageRoute(BaseModel):
 
 # Keyed by (provider, profile_name).
 RECOMMENDED_ROUTES: dict[tuple[str, str], StageRoute] = {
-    # Z.AI: matches the long-standing CLAUDE.md recommendation — cheap GLM
-    # for decomposition, full GLM-5.1 for analysis/gap/synthesis.
+    # Z.AI: cheap GLM for decomposition, full GLM-5.3 for analysis/gap/synthesis.
     ("zai", "balanced"): StageRoute(
         decompose="glm-4.5-air",
-        analyze="glm-5.1",
-        gap_analysis="glm-5.1",
-        synthesize="glm-5.1",
+        analyze="glm-5.3",
+        gap_analysis="glm-5.3",
+        synthesize="glm-5.3",
     ),
     # Z.AI "budget": the cheap air model carries the high-volume iterative
-    # stages; quality-sensitive gap-analysis/synthesis stay on glm-5.1.
+    # stages; quality-sensitive gap-analysis/synthesis stay on glm-5.3.
     ("zai", "budget"): StageRoute(
         decompose="glm-4.5-air",
         analyze="glm-4.5-air",
-        gap_analysis="glm-5.1",
-        synthesize="glm-5.1",
+        gap_analysis="glm-5.3",
+        synthesize="glm-5.3",
     ),
     # Z.AI "quality": strongest registered model on every stage.
     ("zai", "quality"): StageRoute(
-        decompose="glm-5.1",
-        analyze="glm-5.1",
-        gap_analysis="glm-5.1",
-        synthesize="glm-5.1",
+        decompose="glm-5.3",
+        analyze="glm-5.3",
+        gap_analysis="glm-5.3",
+        synthesize="glm-5.3",
     ),
     # OpenCode Go: only the GLMs are production-tier here, so the safe
     # default keeps every stage on glm-5.1. No model mixing, no surprises.

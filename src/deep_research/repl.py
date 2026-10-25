@@ -13,22 +13,31 @@ a `ReplState` instance and are read each time you start a query.
 from __future__ import annotations
 
 import asyncio
-import os
+import difflib
 import shlex
-from dataclasses import dataclass, field
+import shutil
+import sys
+import time
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
 
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.console import Group
+from rich.markup import escape
+from rich.padding import Padding
+from rich.prompt import Confirm
 from rich.table import Table
+from rich.text import Text
 
-from .capabilities import CapabilityViolation, known_profiles
-from .config import _xdg_config_home, settings
-from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
-from .output.report import display_report, save_report
+from . import __version__, views
+from .capabilities import (
+    PIPELINE_STAGES, CapabilityViolation, known_profiles, lookup, registered_providers_for,
+)
+from .config import _PROVIDER_PROTOCOLS, _xdg_config_home, settings
+from .interactive import pick_option, show_view
+from .models import ReportStyle, ResearchConfig, ResearchDepth
+from .options import academic_reason, depth_choices, model_choices, style_choices, template_choices
 from .setup_wizard import (
     run_login,
     run_logout,
@@ -38,15 +47,11 @@ from .setup_wizard import (
 from .storage.db import (
     delete_session,
     fork_session,
-    list_sessions,
     load_report as db_load,
 )
-from .pipeline.orchestrator import acontinue_research, arun_research
-from .pipeline.agent import arun_agent_research
+from .ui import console, fail, glyph, note, ok, problem_count, warn
 
-console = Console()
-
-VERSION = "0.4.0"
+VERSION = __version__
 
 
 @dataclass
@@ -55,7 +60,6 @@ class ReplState:
     depth: ResearchDepth = ResearchDepth.STANDARD
     style: ReportStyle = ReportStyle.STANDARD
     template: Optional[str] = None
-    thinking: bool = False
     academic: bool = False
     agent: bool = False
     fresh: bool = False
@@ -63,8 +67,6 @@ class ReplState:
     def to_config(self) -> ResearchConfig:
         config = ResearchConfig.from_depth(self.depth)
         config.report_style = self.style
-        if self.thinking:
-            config.use_thinking = True
         if self.academic:
             config.use_academic_search = True
         if self.template:
@@ -74,84 +76,176 @@ class ReplState:
         config.load_model_routes()
         return config
 
+    def academic_reason(self) -> Optional[str]:
+        """Why academic sources will be searched (None if they won't be)."""
+        return academic_reason(self.depth.value, self.template, self.academic)
+
+    def shape(self) -> str:
+        return views.shape_summary(
+            self.depth.value, self.style.value, self.template,
+            self.academic, self.agent, self.fresh,
+        )
+
+
+Choices = Callable[[], list]  # -> [(value, description), ...]
+
+GROUPS = ("Research", "Model", "Sessions", "Credentials", "General")
+
 
 @dataclass
 class Command:
     name: str
-    handler: Callable[["ReplState", list[str]], Optional[bool]]
+    handler: Callable[["ReplState", list], Optional[bool]]
     summary: str
     usage: str = ""
-    aliases: tuple[str, ...] = ()
+    aliases: tuple = ()
+    group: str = "General"
+    choices: Optional[Choices] = None   # drives `/cmd` listings and argument completion
+    current: Optional[Callable[["ReplState"], Optional[str]]] = None  # value to mark in the picker
+    details: str = ""                   # shown by `/help <command>`
+    # Completion for commands with more than one argument: receives the
+    # arguments already typed, returns the choices for the next one.
+    arg_choices: Optional[Callable[[list], list]] = None
+    # A custom interactive flow for a command typed in a terminal. Receives
+    # (state, args, line); returns the line to run, or None if cancelled.
+    interactive: Optional[Callable[["ReplState", list, str], Optional[str]]] = None
+    # What the user sees after the command runs in a terminal:
+    #   "silent" - nothing on success (the status line already shows the new
+    #              state); anything that went wrong is shown in the viewer
+    #   "view"   - the output is shown in a closable viewer, then vanishes
+    #   "live"   - printed normally (runs, wizards, prompts)
+    display: str = "live"
 
-    def all_names(self) -> tuple[str, ...]:
+    def all_names(self) -> tuple:
         return (self.name,) + self.aliases
+
+    def short_usage(self) -> str:
+        """Usage for dense listings: the value list is shown separately (and
+        by `/<cmd>` itself), so `[value]` stands in for it here."""
+        return "[value]" if self.choices and not (self.interactive or self.arg_choices) else self.usage
 
 
 # --- handlers -----------------------------------------------------------
 
-def _toggle(state: ReplState, attr: str, label: str) -> None:
-    setattr(state, attr, not getattr(state, attr))
-    console.print(f"  {label}: [bold]{'on' if getattr(state, attr) else 'off'}[/bold]")
+def _indent(renderable) -> Padding:
+    return Padding(renderable, (0, 0, 0, 2))
 
 
-def _cmd_depth(state: ReplState, args: list[str]) -> None:
+def _print_choices(
+    label: str, current: Optional[str], choices: list, command: str, clearable: bool = False,
+) -> None:
+    """The option picker: every valid value with what it does, current marked."""
+    console.print(f"[brand]{label}[/brand]")
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(no_wrap=True)
+    grid.add_column(no_wrap=True)
+    grid.add_column()
+    for value, blurb in choices:
+        chosen = value == current
+        grid.add_row(
+            Text(glyph("on") if chosen else glyph("off"), style="brand" if chosen else "muted"),
+            Text(value, style="cmd" if chosen else ""),
+            Text(blurb, style="" if chosen else "muted"),
+        )
+    if clearable:
+        chosen = current is None
+        grid.add_row(
+            Text(glyph("on") if chosen else glyph("off"), style="brand" if chosen else "muted"),
+            Text("none", style="cmd" if chosen else ""),
+            Text("No template", style="" if chosen else "muted"),
+        )
+    console.print(_indent(grid))
+    note(f"Change with {command} <value>.")
+
+
+def _choice_command(
+    state: ReplState, args: list, *, command: str, attr: str, label: str,
+    choices: list, coerce: Callable, clearable: bool = False,
+) -> None:
+    raw = getattr(state, attr)
+    current = raw.value if isinstance(raw, Enum) else raw
+    valid = [v for v, _ in choices]
     if not args:
-        console.print(f"  Depth: [bold]{state.depth.value}[/bold]")
+        _print_choices(label, current, choices, command, clearable)
         return
-    try:
-        state.depth = ResearchDepth(args[0])
-    except ValueError:
-        console.print(f"  [red]Unknown depth {args[0]!r}.[/red] Valid: quick, standard, deep")
-        return
-    console.print(f"  Depth: [bold]{state.depth.value}[/bold]")
-
-
-def _cmd_style(state: ReplState, args: list[str]) -> None:
-    if not args:
-        console.print(f"  Style: [bold]{state.style.value}[/bold]")
-        return
-    try:
-        state.style = ReportStyle(args[0])
-    except ValueError:
-        console.print(f"  [red]Unknown style {args[0]!r}.[/red] Valid: brief, standard, academic")
-        return
-    console.print(f"  Style: [bold]{state.style.value}[/bold]")
-
-
-def _cmd_template(state: ReplState, args: list[str]) -> None:
-    if not args:
-        console.print(f"  Template: [bold]{state.template or 'none'}[/bold]")
-        return
-    val = args[0].lower()
-    if val in ("none", "off", "clear"):
-        state.template = None
-    elif val in ("technology", "science", "market", "literature"):
-        state.template = val
+    value = args[0].lower()
+    if clearable and value in ("none", "off", "clear"):
+        setattr(state, attr, None)
+    elif value in valid:
+        setattr(state, attr, coerce(value))
     else:
-        console.print(f"  [red]Unknown template {val!r}.[/red] Valid: technology, science, market, literature, none")
+        options = valid + (["none"] if clearable else [])
+        fail(f"Unknown {label.lower()} {escape(repr(args[0]))}.", hint=f"Valid: {', '.join(options)}")
         return
-    console.print(f"  Template: [bold]{state.template or 'none'}[/bold]")
+    new = getattr(state, attr)
+    shown = (new.value if isinstance(new, Enum) else new) or "none"
+    blurb = dict(choices).get(shown, "")
+    ok(f"{label}: [bold]{shown}[/bold]" + (f"  [muted]{escape(blurb)}[/muted]" if blurb else ""))
 
 
-def _cmd_thinking(state: ReplState, args: list[str]) -> None:
-    _toggle(state, "thinking", "Thinking")
+def _cmd_depth(state: ReplState, args: list) -> None:
+    _choice_command(state, args, command="/depth", attr="depth", label="Depth",
+                    choices=depth_choices(), coerce=ResearchDepth)
 
 
-def _cmd_academic(state: ReplState, args: list[str]) -> None:
-    _toggle(state, "academic", "Academic sources")
+def _cmd_style(state: ReplState, args: list) -> None:
+    _choice_command(state, args, command="/style", attr="style", label="Style",
+                    choices=style_choices(), coerce=ReportStyle)
 
 
-def _cmd_agent(state: ReplState, args: list[str]) -> None:
-    _toggle(state, "agent", "Agent mode")
+def _cmd_template(state: ReplState, args: list) -> None:
+    _choice_command(state, args, command="/template", attr="template", label="Template",
+                    choices=template_choices(), coerce=str, clearable=True)
 
 
-def _cmd_fresh(state: ReplState, args: list[str]) -> None:
-    _toggle(state, "fresh", "Fresh mode")
+def _toggle(state: ReplState, attr: str, label: str, meaning: str) -> None:
+    setattr(state, attr, not getattr(state, attr))
+    on = getattr(state, attr)
+    ok(f"{label}: [bold]{'on' if on else 'off'}[/bold]" + (f"  [muted]{meaning}[/muted]" if on else ""))
 
 
-def _cmd_provider(state: ReplState, args: list[str]) -> None:
+def _cmd_academic(state: ReplState, args: list) -> None:
+    state.academic = not state.academic
+    reason = state.academic_reason()
+    if state.academic:
+        ok("Academic sources: [bold]on[/bold]  [muted]arXiv and Semantic Scholar are searched too[/muted]")
+    elif reason:
+        # The switch is off but the template/depth still pulls them in.
+        warn(f"Switch is off, but the {reason} still searches academic sources.")
+    else:
+        ok("Academic sources: [bold]off[/bold]")
+
+
+def _cmd_agent(state: ReplState, args: list) -> None:
+    _toggle(state, "agent", "Agent mode", "the agent decides when to search more or stop")
+
+
+def _cmd_fresh(state: ReplState, args: list) -> None:
+    _toggle(state, "fresh", "Fresh mode", "pages from past sessions are revisited")
+
+
+def _template_choices_with_none() -> list:
+    return template_choices() + [("none", "No template")]
+
+
+def _provider_choices() -> list:
+    return [(name, f"endpoints: {', '.join(families)}") for name, families in _PROVIDER_PROTOCOLS.items()]
+
+
+def _route_choices() -> list:
+    try:
+        return [(name, "") for name in known_profiles(settings.active_provider)]
+    except Exception:
+        return []
+
+
+def _cmd_provider(state: ReplState, args: list) -> None:
     if not args:
-        console.print(f"  Provider: [bold]{settings.active_provider}[/bold]")
+        try:
+            current = settings.active_provider
+        except Exception:
+            current = None
+        _print_choices("Provider", current, _provider_choices(), "/provider")
         return
     val = args[0]
     original = settings.llm_provider
@@ -160,15 +254,14 @@ def _cmd_provider(state: ReplState, args: list[str]) -> None:
         info = settings.validate_routes()
     except (CapabilityViolation, ValueError) as e:
         settings.llm_provider = original
-        console.print(f"  [red]Cannot switch to {val!r}: {e}[/red]")
+        fail(f"Cannot switch to {escape(repr(val))}: {escape(str(e))}")
         return
-    console.print(f"  Provider: [bold]{settings.active_provider}[/bold] ({info['endpoint_family']})")
+    ok(f"Provider: [bold]{settings.active_provider}[/bold] ({info['endpoint_family']})")
 
 
-def _cmd_route(state: ReplState, args: list[str]) -> None:
+def _cmd_route(state: ReplState, args: list) -> None:
     if not args:
-        profiles = known_profiles(settings.active_provider) or ["(none)"]
-        console.print(f"  Route: [bold]{settings.llm_route}[/bold]  (available: {', '.join(profiles)})")
+        _print_choices("Route profile", settings.llm_route, _route_choices(), "/route")
         return
     original = settings.llm_route
     settings.llm_route = args[0]
@@ -176,233 +269,399 @@ def _cmd_route(state: ReplState, args: list[str]) -> None:
         settings.validate_routes()
     except (CapabilityViolation, ValueError) as e:
         settings.llm_route = original
-        console.print(f"  [red]Cannot switch route: {e}[/red]")
+        fail(f"Cannot switch route: {escape(str(e))}")
         return
-    console.print(f"  Route: [bold]{settings.llm_route}[/bold]")
+    ok(f"Route: [bold]{settings.llm_route}[/bold]")
 
 
-def _cmd_status(state: ReplState, args: list[str]) -> None:
-    try:
-        info = settings.validate_routes()
-    except CapabilityViolation as e:
-        console.print(f"  [red]Route is invalid: {e}[/red]")
-        info = {}
-    body = (
-        f"Provider:   [bold]{settings.active_provider}[/bold] "
-        f"({info.get('endpoint_family', '?')})\n"
-        f"Profile:    [bold]{settings.llm_route}[/bold]\n"
-        f"Active model: {settings.active_model}\n"
-        f"Fallback:   {settings.llm_fallback_provider or '(none)'}\n"
-        f"\n"
-        f"Depth:      [bold]{state.depth.value}[/bold]\n"
-        f"Style:      [bold]{state.style.value}[/bold]\n"
-        f"Template:   {state.template or '(none)'}\n"
-        f"Thinking:   {'on' if state.thinking else 'off'}\n"
-        f"Academic:   {'on' if state.academic else 'off'}\n"
-        f"Agent mode: {'on' if state.agent else 'off'}\n"
-        f"Fresh mode: {'on' if state.fresh else 'off'}"
-    )
-    if "stages" in info:
-        stage_lines = "\n".join(f"  {k:13} {v}" for k, v in info["stages"].items())
-        body += f"\n\nStage models:\n{stage_lines}"
-    console.print(Panel(body, title="Status", border_style="cyan"))
+def _cmd_status(state: ReplState, args: list) -> None:
+    views.print_status(shape=[
+        ("depth", state.depth.value),
+        ("style", state.style.value),
+        ("template", state.template or "(none)"),
+        ("academic", f"on ({state.academic_reason()})" if state.academic_reason() else "off"),
+        ("agent mode", "on" if state.agent else "off"),
+        ("fresh mode", "on" if state.fresh else "off"),
+    ])
 
 
-def _cmd_history(state: ReplState, args: list[str]) -> None:
-    sessions = list_sessions(limit=25)
-    if not sessions:
-        console.print("  [dim]No research sessions found.[/dim]")
-        return
-    table = Table(title="Research History")
-    table.add_column("ID", style="cyan", justify="right")
-    table.add_column("Parent", style="magenta", justify="right")
-    table.add_column("Query", style="white", max_width=60)
-    table.add_column("Depth", style="yellow")
-    table.add_column("Sources", justify="right")
-    table.add_column("Date", style="dim")
-    for s in sessions[:25]:  # cap recent 25 in REPL output
-        date_str = s["created_at"][:16].replace("T", " ")
-        parent = s.get("parent_session_id")
-        table.add_row(
-            str(s["id"]),
-            str(parent) if parent else "",
-            s["query"][:60],
-            s["depth"],
-            str(s["source_count"]),
-            date_str,
-        )
-    console.print(table)
-    console.print("  [dim]Use /continue <id> to deepen, /inspect <id> to view.[/dim]")
+def _cmd_history(state: ReplState, args: list) -> None:
+    limit = int(args[0]) if args and args[0].isdigit() else 25
+    views.print_history(max(1, limit), repl=True)
 
 
-def _cmd_inspect(state: ReplState, args: list[str]) -> None:
+def _parse_id(args: list, usage: str) -> Optional[int]:
     if not args or not args[0].isdigit():
-        console.print("  [red]Usage: /inspect <session_id>[/red]")
+        fail(f"Usage: {usage}")
+        return None
+    return int(args[0])
+
+
+def _cmd_inspect(state: ReplState, args: list) -> None:
+    usage = "/inspect <session_id> [--full] [--source N]"
+    sid = _parse_id(args, usage)
+    if sid is None:
         return
-    sid = int(args[0])
+    full = "--full" in args
+    source: Optional[int] = None
+    if "--source" in args:
+        i = args.index("--source")
+        if i + 1 >= len(args) or not args[i + 1].isdigit():
+            fail(f"Usage: {usage}")
+            return
+        source = int(args[i + 1])
     report = db_load(sid)
     if report is None:
-        console.print(f"  [red]Session {sid} not found.[/red]")
+        fail(f"Session {sid} not found.")
         return
-    console.print(Panel(
-        f"[bold]Query:[/bold] {report.query}\n"
-        f"[bold]Sources:[/bold] {len(report.sources)}\n"
-        f"[bold]Iterations:[/bold] {len(report.iterations)}\n"
-        f"[bold]Created:[/bold] {report.created_at}",
-        title=f"Session {sid}",
-        border_style="cyan",
-    ))
-    if report.executive_summary:
-        console.print(Markdown(report.executive_summary))
+    if source is not None:
+        views.print_source(report, source)
+    else:
+        views.print_session(report, sid, full=full, repl=True)
 
 
-def _cmd_continue(state: ReplState, args: list[str]) -> None:
-    if not args or not args[0].isdigit():
-        console.print("  [red]Usage: /continue <session_id>[/red]")
+def _cmd_continue(state: ReplState, args: list) -> None:
+    sid = _parse_id(args, "/continue <session_id>")
+    if sid is None:
         return
-    sid = int(args[0])
-    prev = db_load(sid)
-    if prev is None:
-        console.print(f"  [red]Session {sid} not found.[/red]")
+    if db_load(sid) is None:
+        fail(f"Session {sid} not found.")
         return
-    config = state.to_config()
+    from .main import async_continue
+
     if state.agent:
-        console.print(
-            "  [yellow]Note: agent mode has no effect on /continue; "
-            "continuation always uses the gap-analysis loop.[/yellow]"
-        )
-    console.print(f"\n[bold]Continuing session {sid}:[/bold] {prev.query}")
+        warn("Agent mode has no effect on /continue; continuation always uses the gap-analysis loop.")
     try:
-        report = asyncio.run(acontinue_research(prev, config))
-    except Exception as e:
-        console.print(f"  [red]Continuation failed: {e}[/red]")
-        return
-    display_report(report)
-    path = save_report(report)
-    new_id = db_save(report, depth=config.depth.value, parent_session_id=sid)
-    report.id = new_id
-    console.print(f"  [green]Saved as session {new_id}[/green] [dim](parent: {sid})[/dim] -> {path}")
+        asyncio.run(async_continue(sid, state.to_config(), followup=False, repl=True))
+    except SystemExit:
+        # async_continue reports its own errors and exits; inside the REPL
+        # that must not kill the session.
+        pass
 
 
-def _cmd_delete(state: ReplState, args: list[str]) -> None:
-    if not args or not args[0].isdigit():
-        console.print("  [red]Usage: /delete <session_id>[/red]")
+def _cmd_delete(state: ReplState, args: list) -> None:
+    confirmed = "--yes" in args
+    sid = _parse_id([a for a in args if a != "--yes"], "/delete <session_id>")
+    if sid is None:
         return
-    sid = int(args[0])
-    confirm = Prompt.ask(f"  Delete session {sid}?", choices=["y", "n"], default="n")
-    if confirm.lower() != "y":
+    if not confirmed and not Confirm.ask(f"Delete session {sid}?", default=False):
+        note("Cancelled.")
         return
     if delete_session(sid):
-        console.print(f"  [green]Session {sid} deleted.[/green]")
+        ok(f"Session {sid} deleted.")
     else:
-        console.print(f"  [red]Session {sid} not found.[/red]")
+        fail(f"Session {sid} not found.")
 
-def _cmd_fork(state: ReplState, args: list[str]) -> None:
-    if not args or not args[0].isdigit():
-        console.print("  [red]Usage: /fork <session_id> [new query][/red]")
+
+def _cmd_fork(state: ReplState, args: list) -> None:
+    sid = _parse_id(args, "/fork <session_id> [new query]")
+    if sid is None:
         return
-    sid = int(args[0])
     new_query = " ".join(args[1:]).strip() or None
     new_id = fork_session(sid, new_query=new_query)
     if new_id is None:
-        console.print(f"  [red]Session {sid} not found.[/red]")
+        fail(f"Session {sid} not found.")
         return
-    console.print(f"  [green]Forked session {sid} -> {new_id}.[/green]")
+    ok(f"Forked session {sid} {glyph('arrow')} [brand]{new_id}[/brand].")
     if new_query:
-        console.print(f"  [dim]Fork query: {new_query}[/dim]")
-    console.print(f"  [dim]Use /continue {new_id} to refine the fork.[/dim]")
+        note(f"Fork query: {escape(new_query)}")
+    note(f"Refine it with /continue {new_id}.")
 
 
-def _cmd_resynthesize(state: ReplState, args: list[str]) -> None:
-    if not args or not args[0].isdigit():
-        console.print("  [red]Usage: /resynthesize <session_id>[/red]")
+def _cmd_resynthesize(state: ReplState, args: list) -> None:
+    sid = _parse_id(args, "/resynthesize <session_id>")
+    if sid is None:
         return
-    sid = int(args[0])
     if db_load(sid) is None:
-        console.print(f"  [red]Session {sid} not found.[/red]")
+        fail(f"Session {sid} not found.")
         return
     from .main import async_resynthesize
 
-    config = state.to_config()
     try:
-        asyncio.run(async_resynthesize(sid, config))
+        asyncio.run(async_resynthesize(sid, state.to_config(), repl=True))
     except SystemExit:
         # async_resynthesize reports its own errors via console + sys.exit;
         # inside the REPL that must not kill the session.
         pass
 
 
-def _cmd_clear(state: ReplState, args: list[str]) -> None:
+_STAGE_ATTRS = {
+    "decompose": "model_decompose",
+    "analyze": "model_analyze",
+    "gap_analysis": "model_gap_analysis",
+    "synthesize": "model_synthesize",
+}
+_DEFAULT_WORDS = ("default", "profile", "reset")
+
+
+def _stage_models() -> dict:
+    try:
+        return settings.effective_stage_models()
+    except Exception:
+        return {}
+
+
+def _model_stage_choices() -> list:
+    """`all` plus each stage with the model it uses now."""
+    stages, overrides = _stage_models(), settings.stage_models()
+    rows = [("all", "Every stage")]
+    for stage in PIPELINE_STAGES:
+        model = stages.get(stage, "?")
+        rows.append((stage, f"{model}" + ("  (set by you)" if stage in overrides else "  (route profile)")))
+    return rows
+
+
+def _model_pick_list() -> list:
+    """Models for the active provider, then the way back to the profile's pick."""
+    try:
+        provider = settings.active_provider
+    except Exception:
+        return []
+    rows = model_choices(provider, preferred=settings.active_model)
+    return rows + [("default", "Use the route profile's model")]
+
+
+def _model_arg_choices(previous: list) -> list:
+    if not previous:
+        return _model_stage_choices()
+    if len(previous) == 1:
+        return _model_pick_list()
+    return []
+
+
+def _cmd_model(state: ReplState, args: list) -> None:
+    if not args:
+        grid = Table.grid(padding=(0, 3))
+        grid.add_column(style="cmd", no_wrap=True)
+        grid.add_column(no_wrap=True)
+        grid.add_column(style="muted")
+        overrides = settings.stage_models()
+        for stage, model in _stage_models().items():
+            grid.add_row(stage, model, "set by you" if stage in overrides else f"{settings.llm_route} profile")
+        console.print(_indent(grid))
+        note("Change one with /model <stage|all> <model|default>.")
+        return
+
+    stage = args[0].lower().replace("-", "_")
+    stages = list(PIPELINE_STAGES) if stage == "all" else [stage]
+    if stage != "all" and stage not in _STAGE_ATTRS:
+        fail(f"Unknown stage {escape(repr(args[0]))}.", hint="Stages: all, " + ", ".join(PIPELINE_STAGES))
+        return
+    if len(args) < 2:
+        fail(f"Usage: /model {stage} <model|default>", hint="Models: " + ", ".join(v for v, _ in _model_pick_list()))
+        return
+
+    model = args[1]
+    clear = model.lower() in _DEFAULT_WORDS
+    if not clear:
+        provider = settings.active_provider
+        if lookup(provider, model) is None:
+            elsewhere = registered_providers_for(model)
+            if elsewhere:
+                fail(f"{escape(model)} belongs to {', '.join(elsewhere)}, not {provider}.",
+                     hint="Models for " + provider + ": " + ", ".join(v for v, _ in model_choices(provider)))
+                return
+            warn(f"{escape(model)} is not in the capability registry; thinking and endpoint support are unverified.")
+
+    original = {s: getattr(settings, _STAGE_ATTRS[s]) for s in stages}
+    for s in stages:
+        setattr(settings, _STAGE_ATTRS[s], "" if clear else model)
+    try:
+        settings.validate_routes()
+    except (CapabilityViolation, ValueError) as e:
+        for s, value in original.items():
+            setattr(settings, _STAGE_ATTRS[s], value)
+        fail(f"Cannot use {escape(model)}: {escape(str(e))}")
+        return
+    target = "every stage" if stage == "all" else stage
+    ok(f"Model for {target}: [bold]{'route profile default' if clear else escape(model)}[/bold]")
+
+
+def _model_interactive(state: ReplState, args: list, line: str) -> Optional[str]:
+    """Bare `/model` -> pick a stage, then a model. Fully typed lines pass through."""
+    if len(args) >= 2:
+        return line
+    stage = args[0].lower().replace("-", "_") if args else None
+    if stage is None:
+        stage = pick_option("Model · which stage?", _model_stage_choices(), None)
+        if stage is None:
+            return None
+    elif stage != "all" and stage not in _STAGE_ATTRS:
+        return line  # let the handler explain the typo
+    models = _model_pick_list()
+    if not models:
+        return line
+    stages = _stage_models()
+    if stage == "all":
+        used = set(stages.values())
+        current = used.pop() if len(used) == 1 else None
+    else:
+        current = stages.get(stage)
+    model = pick_option(f"Model for {'every stage' if stage == 'all' else stage}", models, current)
+    return None if model is None else f"/model {stage} {model}"
+
+
+def _delete_interactive(state: ReplState, args: list, line: str) -> Optional[str]:
+    """`/delete 3` -> a Yes/No picker instead of a typed prompt."""
+    if not args or not args[0].isdigit() or "--yes" in args or db_load(int(args[0])) is None:
+        return line  # nothing to confirm (the handler reports a missing session)
+    answer = pick_option(
+        f"Delete session {args[0]}?",
+        [("no", "Keep it"), ("yes", "Delete it permanently")], "no",
+    )
+    return f"/delete {args[0]} --yes" if answer == "yes" else None
+
+
+def _cmd_clear(state: ReplState, args: list) -> None:
     console.clear()
 
 
-def _cmd_setup(state: ReplState, args: list[str]) -> None:
+def _cmd_setup(state: ReplState, args: list) -> None:
     run_setup_wizard()
 
 
-def _cmd_login(state: ReplState, args: list[str]) -> None:
+def _cmd_login(state: ReplState, args: list) -> None:
     run_login(args[0] if args else None)
 
 
-def _cmd_logout(state: ReplState, args: list[str]) -> None:
+def _cmd_logout(state: ReplState, args: list) -> None:
     run_logout(args[0] if args else None)
 
 
-def _cmd_keys(state: ReplState, args: list[str]) -> None:
+def _cmd_keys(state: ReplState, args: list) -> None:
     show_keys_status()
 
 
-def _cmd_help(state: ReplState, args: list[str]) -> None:
-    rows = [
-        (cmd.name + (" " + cmd.usage if cmd.usage else ""), cmd.summary)
-        for cmd in COMMANDS
-    ]
-    table = Table(title="Slash Commands", show_header=False, border_style="dim")
-    table.add_column("Command", style="cyan", no_wrap=True)
-    table.add_column("Description", style="white")
-    for name, summary in rows:
-        table.add_row(name, summary)
-    console.print(table)
-    console.print(
-        "  [dim]Type a research question (anything not starting with /) to run it.[/dim]"
-    )
+def _label(cmd: Command, *, compact: bool = False) -> Text:
+    label = Text(cmd.name, style="cmd")
+    usage = cmd.short_usage() if compact else cmd.usage
+    if usage:
+        label.append(" " + usage, style="arg")
+    return label
 
 
-def _cmd_quit(state: ReplState, args: list[str]) -> bool:
+def _cmd_help(state: ReplState, args: list) -> None:
+    if args:
+        _help_for(args[0])
+        return
+    for group in GROUPS:
+        cmds = [c for c in COMMANDS if c.group == group]
+        grid = Table.grid(padding=(0, 3))
+        grid.add_column(no_wrap=True)
+        grid.add_column()
+        for cmd in cmds:
+            description = Text(cmd.summary)
+            if cmd.choices:
+                values = " · ".join(v for v, _ in cmd.choices())
+                description = Group(description, Text(values, style="muted"))
+            grid.add_row(_label(cmd, compact=True), description)
+        console.print(f"\n[brand]{group}[/brand]")
+        console.print(_indent(grid))
+    console.print()
+    note("Type a question (anything not starting with /) to research it. "
+         "/help <command> explains one command; Tab completes commands and values.")
+
+
+def _help_for(name: str) -> None:
+    key = name if name.startswith("/") else "/" + name
+    cmd = _COMMAND_INDEX.get(key)
+    if cmd is None:
+        _unknown_command(key)
+        return
+    console.print()
+    console.print(Text.assemble(_label(cmd), (f"  {glyph('dash')}  {cmd.summary}", "")))
+    if cmd.details:
+        note(cmd.details)
+    if cmd.aliases:
+        note("Aliases: " + ", ".join(cmd.aliases))
+    if cmd.choices:
+        console.print()
+        choices = cmd.choices()
+        grid = Table.grid(padding=(0, 3))
+        grid.add_column(no_wrap=True)
+        grid.add_column()
+        for value, blurb in choices:
+            grid.add_row(Text(value, style="cmd"), Text(blurb, style="muted"))
+        console.print(_indent(grid))
+    console.print()
+
+
+def _cmd_quit(state: ReplState, args: list) -> bool:
     return True  # signal to exit
 
 
 # --- registry -----------------------------------------------------------
 
-COMMANDS: tuple[Command, ...] = (
-    Command("/depth",     _cmd_depth,     "Show or set research depth", "[quick|standard|deep]"),
-    Command("/style",     _cmd_style,     "Show or set report style", "[brief|standard|academic]"),
-    Command("/template",  _cmd_template,  "Set domain template (or none)", "[technology|science|market|literature|none]"),
-    Command("/thinking",  _cmd_thinking,  "Toggle thinking mode"),
-    Command("/academic",  _cmd_academic,  "Toggle academic sources (arXiv + Semantic Scholar)"),
-    Command("/agent",     _cmd_agent,     "Toggle autonomous agent loop"),
-    Command("/fresh",     _cmd_fresh,     "Toggle fresh mode (skip URLs from past sessions)"),
-    Command("/provider",  _cmd_provider,  "Show or switch LLM provider", "[zai|opencode-go]"),
-    Command("/route",     _cmd_route,     "Show or set route profile", "[balanced|budget|quality]"),
-    Command("/status",    _cmd_status,    "Show current settings and resolved route"),
-    Command("/history",   _cmd_history,   "List recent research sessions"),
-    Command("/inspect",   _cmd_inspect,   "Show a stored session", "<id>"),
-    Command("/continue",  _cmd_continue,  "Deepen a stored session", "<id>"),
-    Command("/delete",    _cmd_delete,    "Delete a stored session", "<id>"),
-    Command("/fork",      _cmd_fork,      "Fork a session into a new branch", "<id> [query]"),
-    Command("/resynthesize", _cmd_resynthesize, "Re-run synthesis on a stored session's sources", "<id>"),
-    Command("/clear",     _cmd_clear,     "Clear the screen"),
-    Command("/setup",     _cmd_setup,     "Run the credential setup wizard"),
-    Command("/login",     _cmd_login,     "Set a single API key in the keyring", "[KEY_NAME]"),
-    Command("/logout",    _cmd_logout,    "Clear stored credentials", "[KEY_NAME|all]"),
-    Command("/keys",      _cmd_keys,      "Show which credentials are stored (never shows values)"),
-    Command("/help",      _cmd_help,      "Show this command list", aliases=("/?",)),
-    Command("/quit",      _cmd_quit,      "Exit the REPL", aliases=("/exit", "/q")),
+COMMANDS: tuple = (
+    Command("/depth", _cmd_depth, "Show or set research depth", "[quick|standard|deep]",
+            group="Research", choices=depth_choices, current=lambda s: s.depth.value,
+            details="How many sub-questions, search results and research passes a run uses.", display="silent"),
+    Command("/style", _cmd_style, "Show or set report style", "[brief|standard|academic]",
+            group="Research", choices=style_choices, current=lambda s: s.style.value,
+            details="The shape and length of the written report.", display="silent"),
+    Command("/template", _cmd_template, "Set a domain template (or none)",
+            "[technology|science|market|literature|none]",
+            group="Research", choices=_template_choices_with_none,
+            current=lambda s: s.template or "none",
+            details="Domain-specific prompts and search strategy.", display="silent"),
+    Command("/academic", _cmd_academic, "Toggle academic sources (arXiv + Semantic Scholar)",
+            group="Research",
+            details="Deep depth and the science/literature templates switch this on by themselves.", display="silent"),
+    Command("/agent", _cmd_agent, "Toggle the autonomous agent loop",
+            group="Research",
+            details="After each pass the agent decides whether to search more, go deeper, broaden, "
+                    "or stop. Does not apply to /continue.", display="silent"),
+    Command("/fresh", _cmd_fresh, "Toggle fresh mode (revisit URLs from past sessions)",
+            group="Research",
+            details="By default, pages analyzed in earlier sessions are skipped so each run finds new material.", display="silent"),
+    Command("/provider", _cmd_provider, "Show or switch the LLM provider", "[zai|opencode-go]",
+            group="Model", choices=_provider_choices, current=lambda s: _safe(lambda: settings.active_provider), display="silent"),
+    Command("/route", _cmd_route, "Show or set the route profile", "[balanced|budget|quality]",
+            group="Model", choices=_route_choices, current=lambda s: settings.llm_route,
+            details="Which model each pipeline stage uses. Available profiles depend on the provider.", display="silent"),
+    Command("/model", _cmd_model, "Show or change the model used by each stage", "[stage] [model]",
+            group="Model", choices=_model_stage_choices, arg_choices=_model_arg_choices,
+            interactive=_model_interactive, display="silent",
+            details="Stages: decompose, analyze, gap_analysis, synthesize, or all. 'default' returns a stage "
+                    "to the route profile's model. Lasts for this session; set MODEL_<STAGE> in .env to keep it."),
+    Command("/status", _cmd_status, "Show settings, resolved models and credentials", group="Model", display="view"),
+    Command("/history", _cmd_history, "List recent research sessions", "[count]", group="Sessions", display="view"),
+    Command("/inspect", _cmd_inspect, "Show a stored session", "<id> [options]",
+            group="Sessions",
+            details="Options: --full prints the detailed findings; --source N shows one source's "
+                    "findings and evidence.", display="view"),
+    Command("/continue", _cmd_continue, "Deepen a stored session", "<id>", group="Sessions",
+            details="Another gap-analysis pass using the current settings; saved as a new linked session."),
+    Command("/fork", _cmd_fork, "Fork a session into a new branch", "<id> [query]", group="Sessions",
+            details="Copies a session so you can continue it without touching the original.", display="view"),
+    Command("/resynthesize", _cmd_resynthesize, "Re-write the report from stored sources", "<id>",
+            group="Sessions",
+            details="No searching: re-runs only synthesis, using the current style and template."),
+    Command("/delete", _cmd_delete, "Delete a stored session", "<id>", group="Sessions", display="silent", interactive=_delete_interactive),
+    Command("/setup", _cmd_setup, "Run the credential setup wizard", group="Credentials"),
+    Command("/login", _cmd_login, "Store a single API key in the keyring", "[KEY_NAME]", group="Credentials"),
+    Command("/logout", _cmd_logout, "Clear stored credentials", "[KEY_NAME|all]", group="Credentials"),
+    Command("/keys", _cmd_keys, "Show which credentials are stored (never shows values)", group="Credentials", display="view"),
+    Command("/clear", _cmd_clear, "Clear the screen", group="General"),
+    Command("/help", _cmd_help, "Show commands, or explain one", "[command]", aliases=("/?",), group="General", display="view"),
+    Command("/quit", _cmd_quit, "Exit", aliases=("/exit", "/q"), group="General"),
 )
 
-_COMMAND_INDEX: dict[str, Command] = {
+_COMMAND_INDEX: dict = {
     name: cmd for cmd in COMMANDS for name in cmd.all_names()
 }
+
+
+def suggest_command(name: str) -> Optional[str]:
+    """Closest known command to a mistyped one, or None."""
+    matches = difflib.get_close_matches(name, _COMMAND_INDEX, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def _unknown_command(name: str) -> None:
+    guess = suggest_command(name)
+    hint = f"Did you mean {guess}?  /help lists every command." if guess else "/help lists every command."
+    fail(f"Unknown command {escape(repr(name))}.", hint=hint)
 
 
 def dispatch(line: str, state: ReplState) -> Optional[bool]:
@@ -420,79 +679,425 @@ def dispatch(line: str, state: ReplState) -> Optional[bool]:
     return cmd.handler(state, args)
 
 
+# --- interactive picker --------------------------------------------------
+
+def _safe(fn: Callable[[], Optional[str]]) -> Optional[str]:
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+def _pick_for_command(line: str, state: "ReplState") -> Optional[str]:
+    """Turn a bare setting command (`/depth`) into a chosen one (`/depth deep`)
+    through the picker. Anything else comes back unchanged. None means the
+    user cancelled the picker."""
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return line
+    cmd = _COMMAND_INDEX.get(parts[0]) if parts else None
+    if cmd is not None and cmd.interactive is not None:
+        return cmd.interactive(state, parts[1:], line)
+    if len(parts) != 1 or cmd is None or cmd.choices is None:
+        return line
+    try:
+        choices = cmd.choices()
+    except Exception:
+        return line
+    if not choices:
+        return line
+    current = cmd.current(state) if cmd.current else None
+    value = pick_option(cmd.name.lstrip("/").capitalize(), choices, current)
+    return None if value is None else f"{cmd.name} {value}"
+
+
 # --- runtime ------------------------------------------------------------
 
-def _enable_history() -> None:
-    """Wire stdlib readline to a persistent history file (best effort)."""
+def _dispatch_reporting(line: str, state: "ReplState") -> Optional[bool]:
+    """dispatch(), with unknown commands and unparseable arguments reported
+    as messages instead of exceptions. True means exit the REPL."""
     try:
-        import readline  # noqa: F401  (auto-attaches to input())
-    except ImportError:
-        return
+        return dispatch(line, state)
+    except KeyError as e:
+        _unknown_command(e.args[0])
+    except ValueError as e:  # shlex: unbalanced quote in the arguments
+        fail(f"Could not parse that command: {escape(str(e))}")
+    return None
+
+
+def _lookup_command(line: str) -> Optional[Command]:
+    try:
+        parts = shlex.split(line)
+    except ValueError:
+        return None
+    return _COMMAND_INDEX.get(parts[0]) if parts else None
+
+
+def _run_transient(line: str, state: "ReplState") -> bool:
+    """Run a slash command typed in a terminal so it leaves nothing behind.
+
+    Settings succeed silently (the status line shows the new state) and
+    anything that went wrong, plus read-only screens like /help, is shown in
+    a viewer that Enter or Esc closes. Commands whose output is the point
+    (runs, wizards, prompts) print normally. True means exit the REPL.
+    """
+    cmd = _lookup_command(line)
+    # Unknown commands and unparseable lines are reported in the viewer too.
+    display = cmd.display if cmd is not None else "view"
+    if display == "live":
+        return bool(_dispatch_reporting(line, state))
+
+    before = problem_count()
+    with console.capture() as captured:
+        should_exit = _dispatch_reporting(line, state)
+    text = captured.get()
+    if text.strip() and (display == "view" or problem_count() > before):
+        show_view(text)
+    return bool(should_exit)
+
+
+def _history_file() -> Optional[Path]:
+    """Path to the persistent REPL history (best effort)."""
     history_dir = _xdg_config_home() / "deep-research"
     try:
         history_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
-        return
-    history_file = history_dir / "repl_history"
-    try:
-        if history_file.exists():
-            readline.read_history_file(str(history_file))
-        readline.set_history_length(1000)
-        import atexit
-        atexit.register(lambda: _save_history(readline, history_file))
-    except (OSError, AttributeError):
-        pass
+        return None
+    return history_dir / "repl_history"
 
 
-def _save_history(readline_mod, history_file: Path) -> None:
+def _command_completer():
+    """Slash-command completer. Typing "/" lists the primary commands; more
+    characters filter fuzzily (aliases join in once you type past the slash);
+    after "/depth " the command's own values complete. Plain (non-slash)
+    queries never trigger completions."""
+    from prompt_toolkit.completion import Completer, Completion, FuzzyCompleter, WordCompleter
+
+    def _meta(cmd: Command) -> str:
+        return cmd.summary
+
+    primary = FuzzyCompleter(WordCompleter(
+        [c.name for c in COMMANDS],
+        meta_dict={c.name: _meta(c) for c in COMMANDS}, sentence=True, ignore_case=True,
+    ))
+    everything = FuzzyCompleter(WordCompleter(
+        list(_COMMAND_INDEX),
+        meta_dict={n: _meta(c) for n, c in _COMMAND_INDEX.items()}, sentence=True, ignore_case=True,
+    ))
+
+    class _SlashOnly(Completer):
+        # Must subclass Completer so get_completions_async comes from the
+        # base — the async path is what complete_while_typing uses.
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor
+            if not text.startswith("/"):
+                return
+            if " " not in text:
+                inner = primary if text == "/" else everything
+                yield from inner.get_completions(document, complete_event)
+                return
+            name, _, rest = text.partition(" ")
+            cmd = _COMMAND_INDEX.get(name)
+            if cmd is None:
+                return
+            *done, typed = rest.split(" ")
+            done = [t for t in done if t]
+            try:
+                if cmd.arg_choices is not None:
+                    choices = cmd.arg_choices(done)
+                elif cmd.choices is not None and not done:
+                    choices = cmd.choices()
+                else:
+                    return
+            except Exception:
+                return
+            for value, blurb in choices:
+                if value.lower().startswith(typed.lower()):
+                    yield Completion(value, start_position=-len(typed), display_meta=blurb)
+
+    return _SlashOnly()
+
+
+def _status_fragments(state: "ReplState") -> list:
+    """Colored, minimal status fragments: depth always; template,
+    non-standard style, and active toggles only when set — no noise for
+    defaults, no always-on flags like thinking."""
     try:
-        readline_mod.write_history_file(str(history_file))
-    except OSError:
-        pass
+        provider = f"{settings.active_provider}/{settings.llm_route}"
+    except Exception:
+        provider = "invalid config"
+    frags = [("class:depth", f" {state.depth.value}")]
+    if state.template:
+        frags += [("class:sep", " · "), ("class:tpl", state.template)]
+    if state.style != ReportStyle.STANDARD:
+        frags += [("class:sep", " · "), ("class:style", state.style.value)]
+    for label, on in (
+        ("academic", state.academic_reason() is not None),
+        ("agent", state.agent), ("fresh", state.fresh),
+    ):
+        if on:
+            frags += [("class:sep", " · "), ("class:on", label)]
+    frags += [("class:sep", " · "), ("class:provider", provider)]
+    return frags
+
+
+_MENU_ROWS = 8
+
+
+def _commits_box(text: str) -> bool:
+    """Whether a submitted line leaves its input box in the scrollback.
+
+    Only a research question does — the box then doubles as the record of
+    what was asked and with which settings. Slash commands and empty Enters
+    erase their box, so changing a setting never stacks up boxes.
+    """
+    text = text.strip()
+    return bool(text) and not text.startswith("/")
+
+
+class _BoxedPrompt:
+    """Claude-Code-style input box: rounded border with the run state in the
+    top edge (tmux-style titled border), rebuilt on every prompt. No separate
+    status line."""
+
+    def __init__(self, state: "ReplState", *, input=None, output=None) -> None:
+        from prompt_toolkit.application import Application
+
+        from prompt_toolkit.buffer import Buffer
+        from prompt_toolkit.filters import Condition
+        from prompt_toolkit.history import FileHistory
+        from prompt_toolkit.key_binding import KeyBindings, merge_key_bindings
+        from prompt_toolkit.key_binding.bindings.basic import load_basic_bindings
+        from prompt_toolkit.key_binding.bindings.emacs import load_emacs_bindings
+        from prompt_toolkit.layout import (
+            ConditionalContainer, FormattedTextControl, HSplit, Layout, VSplit, Window,
+        )
+        from prompt_toolkit.layout.controls import BufferControl
+        from prompt_toolkit.layout.processors import AfterInput, ConditionalProcessor
+        from prompt_toolkit.styles import Style
+
+        # Rounded-box drawing built from Windows (Frame hard-codes square
+        # corners in prompt_toolkit 3.0.x).
+        def edge(left: str, mid: str, right: str) -> "HSplit":
+            # The middle cell must be allowed to stretch (no
+            # dont_extend_width) or the border collapses to just corners.
+            return HSplit([VSplit([
+                Window(width=1, height=1, char=left, style="class:border"),
+                Window(height=1, char=mid, style="class:border"),
+                Window(width=1, height=1, char=right, style="class:border"),
+            ])])
+
+        history_path = _history_file()
+        history = FileHistory(str(history_path)) if history_path is not None else None
+
+        kb = KeyBindings()
+
+        @kb.add("enter")
+        def _accept(event):
+            text = event.app.current_buffer.text
+            # Claude-Code-style command expansion, deterministic: an exact
+            # command submits as typed; a UNIQUE prefix ("/dep⏎") expands to
+            # "/depth"; anything ambiguous or with arguments is untouched.
+            # (complete_state is async and may be gone by Enter, so don't
+            # rely on it.)
+            if text.startswith("/") and " " not in text.strip() and text not in _COMMAND_INDEX:
+                matches = [k for k in _COMMAND_INDEX if k.startswith(text)]
+                if len(matches) == 1:
+                    text = matches[0]
+            # Only a research question keeps its box in the scrollback.
+            event.app.erase_when_done = not _commits_box(text)
+            event.app.exit(result=text)
+
+        @kb.add("c-c")
+        def _cancel(event):
+            buf = event.app.current_buffer
+            if buf.text:
+                buf.reset()  # first Ctrl-C clears the line, like Claude Code
+            else:
+                event.app.erase_when_done = True
+                event.app.exit(exception=KeyboardInterrupt)
+
+        @kb.add("c-d")
+        def _eof(event):
+            if not event.app.current_buffer.text:
+                event.app.erase_when_done = True
+                event.app.exit(exception=EOFError)
+
+        @kb.add("tab")
+        def _complete_next(event):
+            event.app.current_buffer.complete_next()
+
+        @kb.add("s-tab")
+        def _complete_prev(event):
+            event.app.current_buffer.complete_previous()
+
+        @kb.add("c-u")
+        def _clear_line(event):
+            # readline parity: delete from cursor to start of line.
+            buf = event.app.current_buffer
+            buf.delete_before_cursor(len(buf.text))
+
+        self._buffer = Buffer(
+            completer=_command_completer(), history=history,
+            complete_while_typing=True, multiline=False,
+        )
+        def top_border():
+            # Titled border: the status text lives inside the box's top
+            # edge (tmux-style) — no separate status line above the input.
+            cols = shutil.get_terminal_size().columns
+            inner = _status_fragments(state)
+            inner_len = sum(len(t) for _, t in inner) + 2  # padding spaces
+            frags = [("class:border", "╭─ ")] + inner + [("class:border", " ")]
+            frags += [("class:border", "─" * max(1, cols - inner_len - 4) + "╮")]
+            return frags
+
+        # Empty-box hint, gone as soon as anything is typed.
+        placeholder = ConditionalProcessor(
+            AfterInput("Ask a research question, or type / for commands", style="class:placeholder"),
+            filter=Condition(lambda: not self._buffer.text),
+        )
+        input_row = VSplit([
+            Window(width=1, char="│", style="class:border"),
+            Window(width=2, height=1,
+                   content=FormattedTextControl([("class:prompt", "❯ ")]),
+                   dont_extend_width=True),
+            Window(BufferControl(buffer=self._buffer, input_processors=[placeholder]),
+                   wrap_lines=False, dont_extend_height=True),
+            Window(width=1, char="│", style="class:border"),
+        ])
+        box = HSplit([
+            Window(FormattedTextControl(top_border), height=1),
+            input_row,
+            edge("╰", "─", "╯"),
+        ])
+
+        # Inline completion area BELOW the box — part of the layout itself,
+        # not a float, so it renders identically in terminals that don't
+        # answer cursor-position requests. Hidden entirely when no
+        # completions are active (i.e. for any non-slash input). Command
+        # rows are aligned name | usage | summary; value rows (after
+        # "/depth ") are value | meaning. The window scrolls with the
+        # selection so every command is reachable.
+        def render_completions():
+            frags = []
+            cs = self._buffer.complete_state
+            if cs is None:
+                return frags
+            comps = cs.completions
+            selected = cs.complete_index
+            start = 0 if selected is None else max(0, selected - _MENU_ROWS + 1)
+            window = comps[start:start + _MENU_ROWS]
+            width = max((len(c.text) for c in window), default=0)
+            usage_width = max(
+                (len(cmd.short_usage()) for c in window if (cmd := _COMMAND_INDEX.get(c.text))),
+                default=0,
+            )
+            for offset, comp in enumerate(window):
+                is_sel = selected is not None and start + offset == selected
+                cmd = _COMMAND_INDEX.get(comp.text)
+                name_style = "class:selected" if is_sel else "class:menuname"
+                frags.append((name_style, f" {comp.text.ljust(width)}"))
+                if cmd is not None:
+                    frags.append(("class:menuusage", f"  {cmd.short_usage().ljust(usage_width)}"))
+                    frags.append(("class:menumeta", f"  {cmd.summary}"))
+                elif comp.display_meta_text:
+                    frags.append(("class:menumeta", f"  {comp.display_meta_text}"))
+                frags.append(("", "\n"))
+            hidden_above, hidden_below = start, len(comps) - start - len(window)
+            if hidden_above or hidden_below:
+                frags.append(("class:dim", f" {len(comps)} matches — Tab/Shift-Tab to move"))
+            else:
+                frags.append(("class:dim", " Tab to cycle · Enter to run"))
+            return frags
+
+        has_completions = Condition(lambda: self._buffer.complete_state is not None)
+        menu = ConditionalContainer(
+            Window(FormattedTextControl(render_completions), dont_extend_height=True),
+            filter=has_completions,
+        )
+        self._app = Application(
+            layout=Layout(HSplit([box, menu])),
+            key_bindings=merge_key_bindings([
+                load_basic_bindings(), load_emacs_bindings(), kb,
+            ]),
+            style=Style.from_dict({
+                "depth": "bold ansicyan",
+                "sep": "ansibrightblack",
+                "tpl": "ansimagenta",
+                "style": "ansiyellow",
+                "on": "ansigreen",
+                "provider": "ansiblue",
+                "border": "ansicyan",
+                "prompt": "bold ansicyan",
+                "selected": "bold ansicyan reverse",
+                "menuname": "bold ansicyan",
+                "menuusage": "ansiyellow",
+                "menumeta": "ansibrightblack",
+                "placeholder": "ansibrightblack",
+                "dim": "ansibrightblack",
+            }),
+            full_screen=False,
+            input=input,
+            output=output,
+        )
+
+    def prompt(self) -> str:
+        self._app.erase_when_done = False  # the key bindings decide per submit
+        text = self._app.run()
+        self._buffer.reset(append_to_history=True)
+        return text or ""
 
 
 def _print_banner(state: ReplState) -> None:
-    try:
-        info = settings.validate_routes()
-        family = info["endpoint_family"]
-    except Exception:
-        family = "?"
-    console.print(Panel(
-        f"[bold]Deep Research[/bold] v{VERSION}\n"
-        f"[dim]Provider: {settings.active_provider} ({family}) | "
-        f"Profile: {settings.llm_route} | "
-        f"Depth: {state.depth.value} | Style: {state.style.value}[/dim]\n"
-        f"[dim]Type a research question, or /help for commands.[/dim]",
-        border_style="blue",
-    ))
+    views.print_banner(
+        shape=state.shape(),
+        tips="[muted]Ask a question to start  ·  [/muted][cmd]/[/cmd][muted] commands  ·  "
+             "[/muted][cmd]/help[/cmd][muted]  ·  [/muted][cmd]/q[/cmd][muted] quit[/muted]",
+    )
 
 
 async def _run_query(state: ReplState, query: str) -> None:
-    config = state.to_config()
-    try:
-        if state.agent:
-            report = await arun_agent_research(query, config)
-        else:
-            report = await arun_research(query, config)
-    except Exception as e:
-        console.print(f"  [red]Research failed: {e}[/red]")
+    from .main import check_config, research_query
+
+    # Same gate as a one-shot run, minus the setup-wizard offer (that is /setup
+    # here): fail with a pointer instead of an SDK "missing credentials" error.
+    if not check_config():
+        note("Run /setup to store a key, or /status to inspect the resolved route.")
         return
-    display_report(report)
-    path = save_report(report)
-    new_id = db_save(report, depth=config.depth.value)
-    report.id = new_id
-    console.print(f"  [green]Saved as session {new_id}[/green] -> {path}")
+
+    config = state.to_config()
+    started = time.monotonic()
+    try:
+        report = await research_query(query, config, state.agent)
+    except Exception as e:
+        console.print()
+        fail(f"Research failed: {escape(str(e))}")
+        return
+    views.present_report(report, depth=config.depth.value, started=started, repl=True)
 
 
 def run_repl(initial_state: Optional[ReplState] = None) -> None:
     """Entry point: print the banner, loop on input, dispatch."""
     state = initial_state or ReplState()
-    _enable_history()
     _print_banner(state)
+
+    # prompt_toolkit drives the interactive UI (boxed input, slash-command
+    # popup, persistent history). Pipes and other non-tty stdin — scripts,
+    # tests, `echo "/q" | deep-research` — fall back to plain input().
+    boxed = None
+    if sys.stdin is not None and sys.stdin.isatty():
+        try:
+            boxed = _BoxedPrompt(state)
+        except Exception:
+            boxed = None
 
     while True:
         try:
-            line = input("> ").strip()
+            if boxed is not None:
+                line = boxed.prompt().strip()
+            else:
+                line = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
             console.print()
             break
@@ -500,19 +1105,25 @@ def run_repl(initial_state: Optional[ReplState] = None) -> None:
             continue
 
         if line.startswith("/"):
-            try:
-                should_exit = dispatch(line, state)
-            except KeyError as e:
-                console.print(f"  [red]Unknown command {e.args[0]!r}.[/red] /help for the list.")
-                continue
+            if boxed is None:
+                should_exit = _dispatch_reporting(line, state)
+            else:
+                # Interactive terminal: bare setting commands open a picker,
+                # and the result leaves nothing behind (see _run_transient).
+                line = _pick_for_command(line, state)
+                if line is None:
+                    continue  # cancelled
+                should_exit = _run_transient(line, state)
             if should_exit:
                 break
             continue
 
         # Plain text → research query
+        console.print()
         try:
             asyncio.run(_run_query(state, line))
         except KeyboardInterrupt:
-            console.print("\n  [yellow]Interrupted.[/yellow]")
+            console.print()
+            warn("Interrupted.")
 
-    console.print("[dim]Goodbye.[/dim]")
+    note("Goodbye.")

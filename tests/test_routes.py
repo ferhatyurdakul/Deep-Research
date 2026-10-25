@@ -39,7 +39,7 @@ class TestRouteRegistry:
     def test_zai_balanced_uses_air_for_decompose(self):
         route = resolve_stage_route("zai", "balanced")
         assert route.decompose == "glm-4.5-air"
-        assert route.synthesize == "glm-5.1"
+        assert route.synthesize == "glm-5.3"
 
     def test_opencode_go_balanced_is_all_glm(self):
         # Production-tier safe default; no model mixing.
@@ -82,9 +82,34 @@ class TestRouteRegistry:
         budget = resolve_stage_route("zai", "budget")
         assert budget.decompose == "glm-4.5-air"
         assert budget.analyze == "glm-4.5-air"
-        assert budget.synthesize == "glm-5.1"
+        assert budget.synthesize == "glm-5.3"
         quality = resolve_stage_route("zai", "quality")
-        assert set(quality.as_dict().values()) == {"glm-5.1"}
+        assert set(quality.as_dict().values()) == {"glm-5.3"}
+
+    def test_glm_5_3_is_the_zai_default(self):
+        from deep_research.capabilities import lookup
+
+        cap = lookup("zai", "glm-5.3")
+        assert cap is not None and cap.tier == "production"
+        assert cap.endpoint_families == frozenset({"openai"})
+        assert cap.thinking_dialect == "zai-extra-body"
+        # Every Z.AI profile stage resolves to a registered model.
+        for profile in known_profiles("zai"):
+            for model in resolve_stage_route("zai", profile).as_dict().values():
+                assert lookup("zai", model) is not None, (profile, model)
+        # OpenCode Go profiles are untouched by the Z.AI default.
+        assert resolve_stage_route("opencode-go", "balanced").synthesize == "glm-5.1"
+
+    def test_default_active_model_is_glm_5_3(self, monkeypatch):
+        monkeypatch.delenv("GLM_MODEL", raising=False)
+        import importlib
+
+        import deep_research.config as cfg
+        reloaded = importlib.reload(cfg)
+        try:
+            assert reloaded.Settings(llm_provider="zai", zai_api_key="x").active_model == "glm-5.3"
+        finally:
+            importlib.reload(cfg)
 
 
 class TestEffectiveStageModels:

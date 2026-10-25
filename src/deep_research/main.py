@@ -2,147 +2,135 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
+import time
 from pathlib import Path
+from typing import Optional
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.table import Table
+from rich.markup import escape
+from rich.prompt import Confirm, Prompt
+from rich.text import Text
 
+from . import views
+from .cli_help import INDEX, PROG, CliParser, print_command_list
 from .config import settings
 from .logging_config import setup_logging
 from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
-from .output.report import display_report, save_report
-from .pipeline.orchestrator import arun_research, acontinue_research
-from .pipeline.agent import arun_agent_research
-from .storage.db import (
-    save_report as db_save,
-    load_report as db_load,
-    list_sessions,
-    delete_session,
-    fork_session,
-)
-
-console = Console()
+from .options import DEPTH_VALUES, STYLE_VALUES, TEMPLATE_VALUES
+from .storage.db import delete_session, fork_session, load_report as db_load
+from .ui import console, fail, glyph, note, ok, section, tty, warn
 
 
-def check_config(quiet: bool = False) -> bool:
+def check_config() -> bool:
     """
-    Verify API keys and route capability before a one-shot run.
-
-    `quiet=True` suppresses the route dump (used when the REPL is about to
-    take over and will surface settings via /status).
+    Verify the API key and route capability before a run. Prints only
+    problems; the banner already shows the resolved model and search setup.
     """
     from .capabilities import CapabilityViolation
 
-    ok = True
+    ready = True
     try:
         if not settings.active_api_key:
-            console.print(
-                f"[red]Error: {settings.active_api_key_env_name} not set in .env file "
-                f"(LLM_PROVIDER={settings.llm_provider})[/red]"
+            fail(
+                f"{settings.active_api_key_env_name} is not set "
+                f"(LLM_PROVIDER={escape(settings.llm_provider)})"
             )
-            ok = False
-        if not settings.tavily_api_key and not quiet:
-            console.print("[yellow]Warning: TAVILY_API_KEY not set — falling back to DuckDuckGo for web search[/yellow]")
-        route = settings.validate_routes()
-        if not quiet:
-            console.print(f"[dim]Route: {route}[/dim]")
+            ready = False
+        settings.validate_routes()
     except CapabilityViolation as e:
         # Includes a typo'd LLM_PROVIDER / LLM_ENDPOINT_FAMILY: those surface
-        # as CapabilityViolation from the Settings properties now.
-        console.print(f"[red]Capability check failed: {e}[/red]")
-        ok = False
-    return ok
+        # as CapabilityViolation from the Settings properties.
+        fail(f"Capability check failed: {escape(str(e))}")
+        ready = False
+    return ready
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Deep Research - AI-powered research framework")
-    parser.add_argument("query", nargs="*", help="Research query")
-    # argparse does not validate `default=` against `choices`, so an invalid
-    # RESEARCH_DEPTH env value would crash ResearchDepth(...) later — guard it.
-    default_depth = settings.default_depth
-    if default_depth not in ("quick", "standard", "deep"):
-        console.print(
-            f"[yellow]Ignoring invalid RESEARCH_DEPTH={default_depth!r} "
-            "(expected quick, standard, or deep); using standard.[/yellow]"
+# --- parsers --------------------------------------------------------------
+
+def _validated_default_depth() -> str:
+    """RESEARCH_DEPTH env guard: argparse doesn't validate `default=` against
+    `choices`, so an invalid value would crash ResearchDepth(...) later."""
+    depth = settings.default_depth
+    if depth not in DEPTH_VALUES:
+        warn(
+            f"Ignoring invalid RESEARCH_DEPTH={escape(repr(depth))} "
+            f"(expected {', '.join(DEPTH_VALUES)}); using standard."
         )
-        default_depth = "standard"
+        return "standard"
+    return depth
+
+
+def add_shape_args(parser: argparse.ArgumentParser, *, agent: bool = False) -> None:
+    """Research-shape flags, shared by one-shot runs and continue / resynthesize."""
     parser.add_argument(
-        "--depth", choices=["quick", "standard", "deep"],
-        default=default_depth,
-        help="Research depth (default: %(default)s)",
+        "--depth", choices=DEPTH_VALUES, default=_validated_default_depth(),
+        help="How thorough the research is",
     )
     parser.add_argument(
-        "--thinking", action="store_true",
-        help="Enable thinking mode for deeper analysis",
+        "--style", choices=STYLE_VALUES, default="standard",
+        help="Shape and length of the final report",
+    )
+    parser.add_argument(
+        "--template", choices=TEMPLATE_VALUES,
+        help="Domain-specific prompts and search strategy",
     )
     parser.add_argument(
         "--academic", action="store_true",
-        help="Include arXiv and Semantic Scholar in search",
+        help="Also search arXiv and Semantic Scholar",
     )
-    parser.add_argument(
-        "--template", choices=["technology", "science", "market", "literature"],
-        help="Use a domain-specific research template",
-    )
-    parser.add_argument(
-        "--style", choices=["brief", "standard", "academic"],
-        default="standard",
-        help="Report style (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--agent", action="store_true",
-        help="Use autonomous agent mode (decides when to search more or stop)",
-    )
+    if agent:
+        parser.add_argument(
+            "--agent", action="store_true",
+            help="Autonomous mode: the agent decides when to search more or stop",
+        )
     parser.add_argument(
         "--fresh", action="store_true",
-        help="Ignore previously analyzed URLs (start fresh without cross-session dedup)",
+        help="Revisit pages already analyzed in past sessions",
     )
+
+
+def build_run_parser() -> CliParser:
+    parser = CliParser()
     parser.add_argument(
-        "--history", action="store_true",
-        help="List past research sessions",
+        "query", nargs="*", metavar="QUESTION",
+        help="What to research (omit to open the interactive prompt)",
     )
-    parser.add_argument(
-        "--continue-session", type=int, metavar="ID",
-        help="Continue a previous research session by ID",
-    )
-    parser.add_argument(
-        "--fork-session", type=int, metavar="ID",
-        help="Fork a previous session into a new session (copy, leaves original untouched)",
-    )
-    parser.add_argument(
-        "--fork-query", type=str, default="",
-        help="When used with --fork-session, set a different query on the fork",
-    )
-    parser.add_argument(
-        "--delete", type=int, metavar="ID",
-        help="Delete a research session by ID",
-    )
-    parser.add_argument(
-        "--resynthesize", type=int, metavar="ID",
-        help="Re-run only the synthesis step on an existing session's sources, saved as a new fork",
-    )
-    parser.add_argument(
-        "--inspect", type=int, metavar="ID",
-        help="Show metadata, sub-questions, sources, iterations, and summary for a session",
-    )
-    parser.add_argument(
-        "--full", action="store_true",
-        help="With --inspect: also print the full detailed findings",
-    )
-    parser.add_argument(
-        "--source", type=int, metavar="N",
-        help="With --inspect: deep dive on a specific source by 1-based index",
-    )
-    return parser.parse_args()
+    add_shape_args(parser, agent=True)
+    return parser
+
+
+def build_command_parser(name: str) -> CliParser:
+    parser = CliParser(command=INDEX[name])
+    if name in ("inspect", "fork", "delete", "continue", "resynthesize"):
+        parser.add_argument("id", type=int, metavar="ID", help="Session ID (see `history`)")
+    if name == "history":
+        parser.add_argument("-n", "--limit", type=int, default=25, metavar="N",
+                            help="How many sessions to show")
+    elif name == "inspect":
+        parser.add_argument("--full", action="store_true",
+                            help="Also print the full detailed findings")
+        parser.add_argument("--source", type=int, metavar="N",
+                            help="Deep dive on one source by its 1-based number")
+    elif name == "fork":
+        parser.add_argument("query", nargs="*", metavar="QUERY",
+                            help="New query for the fork (default: keep the original)")
+    elif name in ("continue", "resynthesize"):
+        add_shape_args(parser)
+    elif name in ("login", "logout"):
+        parser.add_argument("key", nargs="?", metavar="KEY",
+                            help="Credential name, e.g. TAVILY_API_KEY" + (" or `all`" if name == "logout" else ""))
+    elif name == "migrate":
+        parser.add_argument("path", nargs="?", metavar="PATH",
+                            help="Legacy research.db to import (default: search common locations)")
+    elif name == "help":
+        parser.add_argument("topic", nargs="?", metavar="COMMAND", help="Command to describe")
+    return parser
 
 
 def build_config(args: argparse.Namespace) -> ResearchConfig:
     config = ResearchConfig.from_depth(ResearchDepth(args.depth))
     config.report_style = ReportStyle(args.style)
-    if args.thinking:
-        config.use_thinking = True
     if args.academic:
         config.use_academic_search = True
     if args.template:
@@ -153,227 +141,67 @@ def build_config(args: argparse.Namespace) -> ResearchConfig:
     return config
 
 
-def show_history() -> None:
-    sessions = list_sessions(limit=25)
-    if not sessions:
-        console.print("[dim]No research sessions found.[/dim]")
-        return
+# --- research flows ---------------------------------------------------------
 
-    table = Table(title="Research History")
-    table.add_column("ID", style="cyan", justify="right")
-    table.add_column("Parent", style="magenta", justify="right")
-    table.add_column("Query", style="white", max_width=60)
-    table.add_column("Depth", style="yellow")
-    table.add_column("Sources", justify="right")
-    table.add_column("Date", style="dim")
-
-    for s in sessions:
-        date_str = s["created_at"][:16].replace("T", " ")
-        parent = s.get("parent_session_id")
-        table.add_row(
-            str(s["id"]),
-            str(parent) if parent else "",
-            s["query"][:60],
-            s["depth"],
-            str(s["source_count"]),
-            date_str,
-        )
-
-    console.print(table)
-    console.print(
-        "\n[dim]--continue-session ID to deepen a session; "
-        "--fork-session ID to copy it into a new branch[/dim]"
-    )
-
-
-def _print_source_detail(report, index_1based: int) -> None:
-    if index_1based < 1 or index_1based > len(report.sources):
-        console.print(
-            f"[red]Source {index_1based} out of range. Session has {len(report.sources)} sources.[/red]"
-        )
-        sys.exit(1)
-    source = report.sources[index_1based - 1]
-    meta_lines = [
-        f"[bold]Title:[/bold]    {source.title}",
-        f"[bold]URL:[/bold]      {source.url}",
-        f"[bold]Type:[/bold]     {source.source_type.value}",
-        f"[bold]Depth:[/bold]    {source.content_depth.value}",
-    ]
-    if source.authors:
-        meta_lines.append(f"[bold]Authors:[/bold]  {', '.join(source.authors)}")
-    if source.published_date:
-        meta_lines.append(f"[bold]Date:[/bold]     {source.published_date}")
-    if source.relevance:
-        meta_lines.append(f"[bold]Relevance:[/bold] {source.relevance}")
-    console.print(Panel("\n".join(meta_lines), title=f"Source #{index_1based}", border_style="cyan"))
-
-    if source.summary:
-        console.print(Panel(source.summary, title="Summary", border_style="dim"))
-
-    if source.key_findings:
-        console.print("\n[bold]Key findings:[/bold]")
-        for f in source.key_findings:
-            console.print(f"  - {f}")
-
-    if source.key_evidence:
-        console.print("\n[bold]Key evidence (verbatim):[/bold]")
-        for e in source.key_evidence:
-            console.print(f'  "{e}"')
-
-    if source.evidenced_findings:
-        console.print("\n[bold]Evidenced findings:[/bold]")
-        for ef in source.evidenced_findings:
-            console.print(f"  - [{ef.confidence}] {ef.finding}")
-            if ef.evidence:
-                console.print(f'    evidence: "{ef.evidence}"')
-
-
-def show_session_detail(session_id: int, full: bool = False, source_index: int | None = None) -> None:
-    report = db_load(session_id)
-    if not report:
-        console.print(f"[red]Session {session_id} not found.[/red]")
-        sys.exit(1)
-
-    if source_index is not None:
-        _print_source_detail(report, source_index)
-        return
-
-    # Header
-    header_lines = [
-        f"[bold]Query:[/bold]   {report.query}",
-        f"[bold]Sources:[/bold] {len(report.sources)}    "
-        f"[bold]Iterations:[/bold] {len(report.iterations)}    "
-        f"[bold]Sub-questions:[/bold] {len(report.sub_questions)}",
-        f"[bold]Created:[/bold] {report.created_at.strftime('%Y-%m-%d %H:%M')}",
-    ]
-    if report.parent_session_id:
-        header_lines.append(f"[bold]Parent:[/bold]  session {report.parent_session_id}")
-    console.print(Panel("\n".join(header_lines), title=f"Session {session_id}", border_style="blue"))
-
-    # Sub-questions
-    if report.sub_questions:
-        console.print(
-            Panel(
-                "\n".join(f"  {i+1}. {sq.question}" for i, sq in enumerate(report.sub_questions)),
-                title="Sub-Questions",
-                border_style="cyan",
-            )
-        )
-
-    # Sources table
-    if report.sources:
-        table = Table(title=f"Sources ({len(report.sources)})")
-        table.add_column("#", style="cyan", justify="right")
-        table.add_column("Type", style="yellow")
-        table.add_column("Depth", style="dim")
-        table.add_column("Title", max_width=70)
-        table.add_column("Findings", justify="right")
-        table.add_column("Evid.", justify="right")
-        for i, src in enumerate(report.sources, 1):
-            table.add_row(
-                str(i),
-                src.source_type.value,
-                src.content_depth.value,
-                src.title[:70],
-                str(len(src.key_findings)),
-                str(len(src.key_evidence) + len(src.evidenced_findings)),
-            )
-        console.print(table)
-        console.print(
-            "[dim]Use --inspect ID --source N to see findings and evidence for source #N[/dim]"
-        )
-
-    # Iterations
-    if report.iterations:
-        lines = []
-        for it in report.iterations:
-            lines.append(
-                f"  [bold]Iter {it.iteration_number}[/bold]: "
-                f"{len(it.sources)} sources, {len(it.knowledge_gaps)} gaps"
-            )
-            for g in it.knowledge_gaps:
-                lines.append(f"      - [{g.priority}] {g.gap_description}")
-                if g.suggested_query:
-                    lines.append(f"        query: {g.suggested_query}")
-        console.print(Panel("\n".join(lines), title=f"Iterations ({len(report.iterations)})", border_style="magenta"))
-
-    # Follow-ups
-    if report.follow_up_questions:
-        console.print(
-            Panel(
-                "\n".join(f"  {i+1}. {q}" for i, q in enumerate(report.follow_up_questions)),
-                title="Suggested Follow-ups",
-                border_style="green",
-            )
-        )
-
-    # Executive summary (always)
-    if report.executive_summary:
-        console.print(Panel(report.executive_summary, title="Executive Summary", border_style="white"))
-
-    # Detailed findings only with --full
-    if full and report.detailed_findings:
-        console.print(Panel(report.detailed_findings, title="Detailed Findings", border_style="white"))
-    elif report.detailed_findings:
-        console.print(
-            f"\n[dim]Detailed findings: {len(report.detailed_findings)} chars. "
-            f"Pass --full to print, or open the saved markdown in outputs/.[/dim]"
-        )
+async def research_query(query: str, config: ResearchConfig, agent_mode: bool) -> ResearchReport:
+    # Imported here: the LLM/search client stack is slow to import and
+    # `--help` / `history` / `status` shouldn't pay for it.
+    if agent_mode:
+        from .pipeline.agent import arun_agent_research
+        return await arun_agent_research(query, config)
+    from .pipeline.orchestrator import arun_research
+    return await arun_research(query, config)
 
 
 async def async_main(query: str, config: ResearchConfig, agent_mode: bool = False) -> None:
-    console.print(f"\n[bold]Researching:[/bold] {query}")
-    if agent_mode:
-        console.print("[dim]Agent mode: autonomous research loop[/dim]")
-    console.print()
-
+    started = time.monotonic()
     try:
-        if agent_mode:
-            report = await arun_agent_research(query, config)
-        else:
-            report = await arun_research(query, config)
+        report = await research_query(query, config, agent_mode)
     except Exception as e:
-        console.print(f"\n[red]Research failed: {e}[/red]")
+        console.print()
+        fail(f"Research failed: {escape(str(e))}")
         sys.exit(1)
 
-    display_report(report)
-
-    path = save_report(report)
-    session_id = db_save(report, depth=config.depth.value)
-    report.id = session_id
-    console.print(f"[green]Report saved to:[/green] {path}")
-    console.print(f"[green]Session ID:[/green] {session_id}\n")
-
+    views.present_report(report, depth=config.depth.value, started=started)
     await followup_loop(report, config, agent_mode=agent_mode)
 
 
-async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
+async def async_resynthesize(
+    session_id: int, config: ResearchConfig, banner_shape: Optional[str] = None,
+    *, repl: bool = False,
+) -> None:
     from .pipeline.synthesizer import asynthesize_report
     from .pipeline.templates import get_template
     from .usage import new_run_tracker, stage
 
     prev = db_load(session_id)
     if not prev:
-        console.print(f"[red]Session {session_id} not found.[/red]")
+        fail(f"Session {session_id} not found.")
         sys.exit(1)
     if not prev.sources:
-        console.print(f"[red]Session {session_id} has no sources to synthesize.[/red]")
+        fail(f"Session {session_id} has no sources to synthesize.")
         sys.exit(1)
 
     tmpl = get_template(config.template) if config.template else None
     template_guidance = tmpl.synthesis_guidance if tmpl else ""
     system_prompt = tmpl.system_prompt if tmpl else ""
 
+    if banner_shape:
+        views.print_banner(shape=banner_shape, task=f"Re-synthesize session {session_id}", query=prev.query)
+    else:
+        section(f"Re-synthesizing session {session_id}")
+        console.print(Text(prev.query, style="bold"))
     suffix = f", template={tmpl.name}" if tmpl else ""
-    console.print(f"\n[bold]Re-synthesizing session {session_id}:[/bold] {prev.query}")
-    console.print(
-        f"[dim]{len(prev.sources)} sources, {len(prev.iterations)} iterations "
-        f"-> style={config.report_style.value}{suffix}[/dim]\n"
+    note(
+        f"{len(prev.sources)} sources, {len(prev.iterations)} iterations "
+        f"{glyph('arrow')} style={config.report_style.value}{suffix}"
     )
+    console.print()
 
+    started = time.monotonic()
     tracker = new_run_tracker()
     try:
-        with console.status("[cyan]Synthesizing report from existing sources..."):
+        with console.status("[brand]Synthesizing report from existing sources..."):
             async with stage("synthesize"):
                 executive, detailed, follow_ups = await asynthesize_report(
                     prev.query,
@@ -387,7 +215,8 @@ async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
                     iteration_count=max(1, len(prev.iterations)),
                 )
     except Exception as e:
-        console.print(f"\n[red]Synthesis failed: {e}[/red]")
+        console.print()
+        fail(f"Synthesis failed: {escape(str(e))}")
         sys.exit(1)
 
     new_report = ResearchReport(
@@ -402,112 +231,112 @@ async def async_resynthesize(session_id: int, config: ResearchConfig) -> None:
         parent_session_id=session_id,
         usage=tracker.snapshot(),
     )
-    console.print(f"\n[dim]{tracker.format_summary()}[/dim]")
-
-    display_report(new_report)
-    path = save_report(new_report)
-    new_id = db_save(new_report, depth=config.depth.value, parent_session_id=session_id)
-    new_report.id = new_id
-    console.print(f"[green]Report saved to:[/green] {path}")
-    console.print(f"[green]New session ID:[/green] {new_id} [dim](parent: {session_id}, resynthesized)[/dim]\n")
+    note(tracker.format_summary())
+    views.present_report(
+        new_report, depth=config.depth.value, parent_session_id=session_id,
+        started=started, relation=f"resynthesized from session {session_id}", repl=repl,
+    )
 
 
-async def async_continue(session_id: int, config: ResearchConfig) -> None:
+async def async_continue(
+    session_id: int, config: ResearchConfig, banner_shape: Optional[str] = None,
+    *, followup: bool = True, repl: bool = False,
+) -> None:
+    from .pipeline.orchestrator import acontinue_research
+
     prev = db_load(session_id)
     if not prev:
-        console.print(f"[red]Session {session_id} not found.[/red]")
+        fail(f"Session {session_id} not found.")
         sys.exit(1)
 
-    console.print(f"\n[bold]Continuing session {session_id}:[/bold] {prev.query}")
-    console.print(f"[dim]Previous research had {len(prev.sources)} sources across {len(prev.iterations)} iterations[/dim]\n")
+    if banner_shape:
+        views.print_banner(shape=banner_shape, task=f"Continue session {session_id}", query=prev.query)
+    else:
+        section(f"Continuing session {session_id}")
+        console.print(Text(prev.query, style="bold"))
+    note(f"Previous research: {len(prev.sources)} sources across {len(prev.iterations)} iterations")
+    console.print()
 
+    started = time.monotonic()
     try:
         report = await acontinue_research(prev, config)
     except Exception as e:
-        console.print(f"\n[red]Research failed: {e}[/red]")
+        console.print()
+        fail(f"Research failed: {escape(str(e))}")
         sys.exit(1)
 
-    display_report(report)
-
-    path = save_report(report)
-    new_id = db_save(report, depth=config.depth.value, parent_session_id=session_id)
-    report.id = new_id
-    console.print(f"[green]Report saved to:[/green] {path}")
-    console.print(f"[green]New session ID:[/green] {new_id} [dim](parent: {session_id})[/dim]\n")
-
-    await followup_loop(report, config)
+    views.present_report(
+        report, depth=config.depth.value, parent_session_id=session_id,
+        started=started, relation=f"continues session {session_id}", repl=repl,
+    )
+    if followup:
+        await followup_loop(report, config)
 
 
-async def followup_loop(report, config: ResearchConfig, agent_mode: bool = False) -> None:
-    if sys.stdin is None or not sys.stdin.isatty():
+async def followup_loop(report: ResearchReport, config: ResearchConfig, agent_mode: bool = False) -> None:
+    if not tty():
         return
 
     while True:
-        followup = Prompt.ask(
-            "[bold]Research a follow-up question? (enter number, new query, or 'q' to quit)[/bold]",
-            default="q",
-        )
-        if followup.lower() in ("q", "quit", "exit"):
+        console.print()
+        answer = Prompt.ask(
+            f"[brand]{glyph('arrow')} follow-up[/brand] "
+            "[muted](a number from the list, a new question, or Enter to finish)[/muted]",
+            default="", show_default=False,
+        ).strip()
+        if not answer or answer.lower() in ("q", "quit", "exit"):
             break
 
-        if followup.isdigit() and report.follow_up_questions:
-            idx = int(followup) - 1
+        if answer.isdigit() and report.follow_up_questions:
+            idx = int(answer) - 1
             if 0 <= idx < len(report.follow_up_questions):
-                followup = report.follow_up_questions[idx]
+                answer = report.follow_up_questions[idx]
 
-        console.print(f"\n[bold]Researching:[/bold] {followup}\n")
+        section("Follow-up")
+        console.print(Text(answer, style="bold"))
+        console.print()
+        started = time.monotonic()
         try:
-            if agent_mode:
-                report = await arun_agent_research(followup, config)
-            else:
-                report = await arun_research(followup, config)
-            display_report(report)
-            path = save_report(report)
-            session_id = db_save(report, depth=config.depth.value)
-            console.print(f"[green]Report saved to:[/green] {path}")
-            console.print(f"[green]Session ID:[/green] {session_id}\n")
+            report = await research_query(answer, config, agent_mode)
+            views.present_report(report, depth=config.depth.value, started=started)
         except Exception as e:
-            console.print(f"\n[red]Research failed: {e}[/red]")
-
-    console.print("[dim]Goodbye![/dim]")
-
-
-_SUBCOMMANDS: tuple[str, ...] = ("setup", "migrate", "login", "logout", "keys")
+            console.print()
+            fail(f"Research failed: {escape(str(e))}")
 
 
-def _handle_subcommand(argv: list[str]) -> bool:
-    """
-    Intercept first-positional-arg subcommands (setup / migrate / login /
-    logout / keys) before the main argparse runs. Returns True when a
-    subcommand was handled, telling main() to exit.
-    """
-    if len(argv) < 2 or argv[1] not in _SUBCOMMANDS:
-        return False
-    name, *rest = argv[1:]
-    if name == "setup":
-        from .setup_wizard import run_setup_wizard
-        run_setup_wizard()
-    elif name == "login":
-        from .setup_wizard import run_login
-        run_login(rest[0] if rest else None)
-    elif name == "logout":
-        from .setup_wizard import run_logout
-        run_logout(rest[0] if rest else None)
-    elif name == "keys":
-        from .setup_wizard import show_keys_status
-        show_keys_status()
-    elif name == "migrate":
-        _run_migrate(rest)
-    return True
+# --- session / maintenance commands ---------------------------------------
+
+def _delete_session_flow(session_id: int) -> None:
+    # Interactive callers get the same confirmation the REPL asks for;
+    # non-tty (scripts) proceed without prompting.
+    if tty():
+        if not Confirm.ask(f"[bold]Delete session {session_id}?[/bold]", default=False):
+            note("Cancelled.")
+            return
+    if delete_session(session_id):
+        ok(f"Session {session_id} deleted.")
+    else:
+        fail(f"Session {session_id} not found.")
 
 
-def _run_migrate(args: list[str]) -> None:
+def _fork_session_flow(session_id: int, new_query: Optional[str]) -> None:
+    new_id = fork_session(session_id, new_query=new_query)
+    if new_id is None:
+        fail(f"Session {session_id} not found.")
+        sys.exit(1)
+    ok(f"Forked session {session_id} {glyph('arrow')} new session [brand]{new_id}[/brand].")
+    if new_query:
+        note(f"Fork query: {escape(new_query)}")
+    note(f"Refine it without touching session {session_id}: {PROG} continue {new_id}")
+
+
+def _run_migrate(path: Optional[str]) -> None:
     """Move a legacy <repo>/data/research.db into the XDG data dir."""
     import shutil
     from .config import DATA_DIR, DB_PATH
 
-    if args:
-        candidate = Path(args[0]).expanduser().resolve()
+    if path:
+        candidate = Path(path).expanduser().resolve()
     else:
         # Try a couple of obvious places. PROJECT_ROOT under pipx-install
         # points at the venv, so we look from cwd up.
@@ -516,205 +345,231 @@ def _run_migrate(args: list[str]) -> None:
             Path.cwd().parent / "data" / "research.db",
             Path.home() / "Documents" / "Projects" / "Deep-Research" / "data" / "research.db",
         ]
-        candidate = next((p for p in candidates if p.exists()), None)
-        if candidate is None:
-            console.print(
-                "[red]Could not find a legacy research.db.[/red] "
-                "Pass an explicit path: deep-research migrate /path/to/research.db"
-            )
+        found = next((p for p in candidates if p.exists()), None)
+        if found is None:
+            fail("Could not find a legacy research.db.",
+                 hint=f"Pass an explicit path: {PROG} migrate /path/to/research.db")
             return
+        candidate = found
 
     if not candidate.exists():
-        console.print(f"[red]No file at {candidate}.[/red]")
+        fail(f"No file at {candidate}.")
         return
     if candidate == DB_PATH:
-        console.print(f"[dim]{candidate} is already the active DB. Nothing to do.[/dim]")
+        note(f"{candidate} is already the active DB. Nothing to do.")
         return
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     if DB_PATH.exists():
         backup = DB_PATH.with_suffix(".db.bak")
-        console.print(f"[yellow]Backing up existing {DB_PATH} -> {backup}[/yellow]")
+        warn(f"Backing up existing {DB_PATH} {glyph('arrow')} {backup}")
         shutil.copy2(DB_PATH, backup)
 
     shutil.copy2(candidate, DB_PATH)
-    console.print(
-        f"[green]Migrated[/green] {candidate} -> {DB_PATH}\n"
-        f"[dim]The original is untouched; delete it manually once you've confirmed.[/dim]"
-    )
+    ok(f"Migrated {candidate} {glyph('arrow')} {DB_PATH}")
+    note("The original is untouched; delete it manually once you've confirmed.")
+
+
+def _ensure_ready() -> None:
+    """check_config gate: offer the wizard when no key is configured, hard-exit
+    on a broken route so a run never starts with mismatched models."""
+    if check_config():
+        return
+    try:
+        key_missing = not settings.active_api_key
+    except Exception:
+        # Invalid provider/family name — not a wizard case; exit below.
+        key_missing = False
+    if not key_missing:
+        fail(
+            "Route validation failed.",
+            hint="Fix LLM_PROVIDER / LLM_ROUTE / model settings above and re-run "
+                 f"(`{PROG} status` shows what is resolved).",
+        )
+        sys.exit(1)
+
+    console.print()
+    warn(f"No {settings.active_api_key_env_name} found in env, .env, or keyring.")
+    if not tty():
+        note(f"Run `{PROG} setup` to store credentials, or set {settings.active_api_key_env_name} in your environment.")
+        sys.exit(1)
+    if not Confirm.ask("[bold]Run the credential setup wizard now?[/bold]", default=True):
+        note(f"Run `{PROG} setup` to store credentials, or set {settings.active_api_key_env_name} in your environment.")
+        sys.exit(1)
+
+    from .setup_wizard import run_setup_wizard
+    run_setup_wizard()
+    settings.reload_credentials()
+    if not settings.active_api_key:
+        fail(f"Still no {settings.active_api_key_env_name} configured. Exiting.")
+        sys.exit(1)
+    if not check_config():
+        fail("Route validation failed.", hint="Fix the configuration above and re-run.")
+        sys.exit(1)
+
+
+def _run_llm_command(name: str, ns: argparse.Namespace) -> None:
+    # continue / resynthesize make LLM calls: validate config first.
+    config = build_config(ns)
+    _ensure_ready()
+    shape = views.shape_from_namespace(ns)
+    coro = async_continue if name == "continue" else async_resynthesize
+    asyncio.run(coro(ns.id, config, banner_shape=shape))
+
+
+def _do_history(ns: argparse.Namespace) -> None:
+    views.print_history(max(1, ns.limit))
+
+
+def _do_inspect(ns: argparse.Namespace) -> None:
+    report = db_load(ns.id)
+    if not report:
+        fail(f"Session {ns.id} not found.")
+        sys.exit(1)
+    if ns.source is not None:
+        if not views.print_source(report, ns.source):
+            sys.exit(1)
+    else:
+        views.print_session(report, ns.id, full=ns.full)
+
+
+def _do_fork(ns: argparse.Namespace) -> None:
+    _fork_session_flow(ns.id, " ".join(ns.query).strip() or None)
+
+
+def _do_delete(ns: argparse.Namespace) -> None:
+    _delete_session_flow(ns.id)
+
+
+def _do_continue(ns: argparse.Namespace) -> None:
+    _run_llm_command("continue", ns)
+
+
+def _do_resynthesize(ns: argparse.Namespace) -> None:
+    _run_llm_command("resynthesize", ns)
+
+
+def _do_setup(ns: argparse.Namespace) -> None:
+    from .setup_wizard import run_setup_wizard
+    run_setup_wizard()
+
+
+def _do_login(ns: argparse.Namespace) -> None:
+    from .setup_wizard import run_login
+    run_login(ns.key)
+
+
+def _do_logout(ns: argparse.Namespace) -> None:
+    from .setup_wizard import run_logout
+    run_logout(ns.key)
+
+
+def _do_keys(ns: argparse.Namespace) -> None:
+    from .setup_wizard import show_keys_status
+    show_keys_status()
+
+
+def _do_status(ns: argparse.Namespace) -> None:
+    views.print_status()
+
+
+def _do_migrate(ns: argparse.Namespace) -> None:
+    _run_migrate(ns.path)
+
+
+def _do_help(ns: argparse.Namespace) -> None:
+    if ns.topic is None:
+        build_run_parser().print_help()
+    elif ns.topic in INDEX:
+        build_command_parser(ns.topic).print_help()
+    else:
+        fail(f"Unknown command {escape(repr(ns.topic))}.")
+        print_command_list()
+        sys.exit(2)
+
+
+# One handler per registered command (cli_help.COMMANDS); a test keeps the
+# two in step.
+HANDLERS = {
+    "history": _do_history,
+    "inspect": _do_inspect,
+    "continue": _do_continue,
+    "resynthesize": _do_resynthesize,
+    "fork": _do_fork,
+    "delete": _do_delete,
+    "setup": _do_setup,
+    "login": _do_login,
+    "logout": _do_logout,
+    "keys": _do_keys,
+    "status": _do_status,
+    "migrate": _do_migrate,
+    "help": _do_help,
+}
+
+
+def run_command(name: str, argv: list) -> None:
+    HANDLERS[name](build_command_parser(name).parse_args(argv))
 
 
 def main() -> None:
-    setup_logging()
+    # Warnings and errors only by default: the INFO stream is per-call route
+    # dumps and result counts that clutter the UI. DEEP_RESEARCH_LOG_LEVEL=INFO
+    # (or DEBUG) brings them back.
+    setup_logging(os.getenv("DEEP_RESEARCH_LOG_LEVEL", "WARNING"), console=console)
+    argv = sys.argv[1:]
 
-    # Intercept subcommands (setup / login / logout / keys / migrate) so
-    # users get a Claude-Code-style flow without the main argparse fighting
-    # for the first positional argument.
-    if _handle_subcommand(sys.argv):
+    # Subcommands are dispatched on the first argument so the free-text
+    # QUESTION positional of a one-shot run never fights with them.
+    if argv and argv[0] in INDEX:
+        run_command(argv[0], argv[1:])
         return
 
-    args = parse_args()
-    if args.fork_query.strip() and not args.fork_session:
-        console.print("[red]--fork-query requires --fork-session.[/red]")
-        sys.exit(1)
+    args = build_run_parser().parse_args(argv)
 
-    if args.history:
-        show_history()
-        return
-
-    if args.delete:
-        # Interactive callers get the same confirmation the REPL asks for;
-        # non-tty (scripts) proceed without prompting.
-        if sys.stdin is not None and sys.stdin.isatty():
-            from rich.prompt import Confirm
-            if not Confirm.ask(f"[bold]Delete session {args.delete}?[/bold]", default=False):
-                console.print("[dim]Cancelled.[/dim]")
-                return
-        if delete_session(args.delete):
-            console.print(f"[green]Session {args.delete} deleted.[/green]")
-        else:
-            console.print(f"[red]Session {args.delete} not found.[/red]")
-        return
-
-    if args.inspect:
-        show_session_detail(args.inspect, full=args.full, source_index=args.source)
-        return
-
-    if args.fork_session:
-        new_query = args.fork_query.strip() or None
-        new_id = fork_session(args.fork_session, new_query=new_query)
-        if new_id is None:
-            console.print(f"[red]Session {args.fork_session} not found.[/red]")
-            sys.exit(1)
-        console.print(
-            f"[green]Forked session {args.fork_session} -> new session {new_id}.[/green]"
-        )
-        if new_query:
-            console.print(f"[dim]Fork query: {new_query}[/dim]")
-        console.print(
-            f"[dim]Run --continue-session {new_id} to refine the fork "
-            f"without touching session {args.fork_session}.[/dim]"
-        )
-        return
-
-    config = build_config(args)
-
-    # If the user launched bare `deep-research`, the REPL prints its own
-    # banner — skip the one-shot Panel so we don't double up on welcome text.
-    is_repl_launch = (
-        not args.query
-        and not args.resynthesize
-        and not args.continue_session
-    )
-
-    if not is_repl_launch:
-        # The banner reads provider/model properties that raise on a typo'd
-        # LLM_PROVIDER / LLM_ENDPOINT_FAMILY — fail with the same clean
-        # message check_config uses instead of a traceback.
-        try:
-            search_engine = "Tavily" if settings.tavily_api_key else "DuckDuckGo"
-            console.print(
-                Panel(
-                    "[bold]Deep Research[/bold]\n"
-                    f"[dim]Provider: {settings.active_provider} ({settings.effective_endpoint_family}) | "
-                    f"Profile: {settings.llm_route} | Model: {settings.active_model} | "
-                    f"Search: {search_engine} | Depth: {config.depth.value}[/dim]",
-                    border_style="blue",
-                )
-            )
-
-            # Heuristic warning: deep depth + agent mode on opencode-go can burn
-            # through the $12/5h cap quickly. We can't query remaining budget — the
-            # OpenCode Go usage API isn't published — so this is purely advisory.
-            if (
-                settings.active_provider == "opencode-go"
-                and config.depth == ResearchDepth.DEEP
-                and getattr(args, "agent", False)
-                and not settings.llm_fallback_provider
-            ):
-                console.print(
-                    "[yellow]Warning: --depth deep + --agent on OpenCode Go can consume a "
-                    "significant share of the $12/5h cap. Consider setting "
-                    "LLM_FALLBACK_PROVIDER (e.g. zai) so the run can survive a 429.[/yellow]"
-                )
-        except ValueError as e:  # includes CapabilityViolation
-            console.print(f"[red]Configuration error: {e}[/red]")
-            sys.exit(1)
-
-    if not check_config(quiet=is_repl_launch):
-        try:
-            key_missing = not settings.active_api_key
-        except Exception:
-            # Invalid provider/family name — not a wizard case; exit below.
-            key_missing = False
-        if key_missing:
-            console.print(
-                f"\n[yellow]No {settings.active_api_key_env_name} found in env, .env, or keyring.[/yellow]"
-            )
-            from rich.prompt import Confirm
-            from .setup_wizard import run_setup_wizard
-            if Confirm.ask("[bold]Run the credential setup wizard now?[/bold]", default=True):
-                run_setup_wizard()
-                settings.reload_credentials()
-                if not settings.active_api_key:
-                    console.print(f"[red]Still no {settings.active_api_key_env_name} configured. Exiting.[/red]")
-                    sys.exit(1)
-                if not check_config(quiet=True):
-                    console.print(
-                        "\n[red]Route validation failed — fix the configuration "
- "above and re-run.[/red]"
-                    )
-                    sys.exit(1)
-            else:
-                console.print(
-                    "[dim]Run `deep-research setup` to store credentials, or set "
-                    f"{settings.active_api_key_env_name} in your environment.[/dim]"
-                )
-                sys.exit(1)
-        else:
-            # Keys are fine — the failure is a route/capability problem. Never
-            # start a run with a broken route: stage models would silently
-            # mismatch or the first LLM call would abort the run.
-            console.print(
-                "\n[red]Route validation failed — fix LLM_PROVIDER / LLM_ROUTE / "
-                "model settings above and re-run.[/red]"
-            )
-            sys.exit(1)
-
-    if args.resynthesize:
-        asyncio.run(async_resynthesize(args.resynthesize, config))
-        return
-
-    if args.continue_session:
-        if args.agent:
-            console.print(
-                "[yellow]Note: --agent has no effect with --continue-session; "
-                "continuation always uses the gap-analysis loop.[/yellow]"
-            )
-        asyncio.run(async_continue(args.continue_session, config))
-        return
-
-    # No positional query and no one-shot flag → launch the interactive REPL.
-    # Direct one-shot usage like `deep-research "topic"` still skips the REPL.
+    # No positional query → launch the interactive REPL. Direct one-shot
+    # usage like `deep-research "topic"` skips the REPL.
     if not args.query:
         from .repl import ReplState, run_repl
         run_repl(ReplState(
             depth=ResearchDepth(args.depth),
             style=ReportStyle(args.style),
             template=args.template,
-            thinking=args.thinking,
             academic=args.academic,
             agent=args.agent,
             fresh=args.fresh,
         ))
         return
 
-    query = " ".join(args.query)
-
-    if not query.strip():
-        console.print("[red]No query provided.[/red]")
+    query = " ".join(args.query).strip()
+    if not query:
+        fail("No query provided.")
         sys.exit(1)
 
+    config = build_config(args)
+    views.print_banner(shape=views.shape_from_namespace(args), query=query)
+
+    # Heuristic warning: deep depth + agent mode on opencode-go can burn
+    # through the $12/5h cap quickly. We can't query remaining budget — the
+    # OpenCode Go usage API isn't published — so this is purely advisory.
+    # Reading the provider raises on a typo'd LLM_PROVIDER; the banner already
+    # reports that, so the advisory is simply skipped.
+    try:
+        if (
+            settings.active_provider == "opencode-go"
+            and config.depth == ResearchDepth.DEEP
+            and args.agent
+            and not settings.llm_fallback_provider
+        ):
+            warn(
+                "--depth deep + --agent on OpenCode Go can consume a significant share of "
+                "the $12/5h cap. Consider setting LLM_FALLBACK_PROVIDER (e.g. zai) so the "
+                "run can survive a 429."
+            )
+    except ValueError:  # includes CapabilityViolation
+        pass
+
+    _ensure_ready()
+    console.print()
     asyncio.run(async_main(query, config, agent_mode=args.agent))
 
 

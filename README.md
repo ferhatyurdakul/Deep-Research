@@ -79,6 +79,8 @@ Inside the REPL, the same commands are available as slash commands: `/setup`, `/
 
 **File-based config still works** — handy for CI, scripted overrides, or air-gapped boxes. Either set environment variables directly (`export ZAI_API_KEY=…`), or put them in `./.env` (per-project, wins when present) or `~/.config/deep-research/.env` (global fallback). The resolution order is: **env var > project `.env` > global `.env` > OS keyring**.
 
+**Diagnostics.** The CLI shows warnings and errors only (retries, failed fetches, rate limits). Set `DEEP_RESEARCH_LOG_LEVEL=INFO` — or `DEBUG` — to also see the per-call route details and result counts. Colors follow `NO_COLOR` and are dropped automatically when output is piped.
+
 ### Where files live
 
 | Path | Override env var | Purpose |
@@ -99,6 +101,8 @@ deep-research "your research question"
 ```
 
 The bare `deep-research` command launches an interactive prompt where you can type questions directly or use slash commands like `/depth deep`, `/template science`, `/agent`, `/history`, `/continue 3`. See **Interactive Mode** below for the full command list.
+
+Everything is discoverable from the terminal: `deep-research --help` lists every option (with what each value means) and every command, `deep-research COMMAND --help` details one command, and `deep-research status` shows the resolved model route, credentials and file locations.
 
 ## CLI Reference
 
@@ -126,25 +130,40 @@ deep-research --style academic "topic"          # ~3000-5000 words, numbered sec
 # Pipeline features
 deep-research --agent "topic"                   # autonomous agent mode (decides when to stop)
 deep-research --academic "topic"                # include arXiv + Semantic Scholar
-deep-research --thinking "topic"                # enable chain-of-thought reasoning
 deep-research --template science "topic"        # domain-specific strategy
 deep-research --fresh "topic"                   # ignore URLs already analyzed in past sessions
 
 # Combine flags freely
 deep-research --agent --template science --style academic --depth deep "topic"
 
-# Session management
-deep-research --history                         # list past sessions
-deep-research --continue-session 3              # deepen a previous session
-deep-research --fork-session 3                  # copy session 3 into a new session (original untouched)
-deep-research --fork-session 3 --fork-query "narrower angle on X"  # fork with a different query
-deep-research --resynthesize 3                  # re-run only synthesis on session 3's sources, save as fork
-deep-research --resynthesize 3 --style academic # same, but with a different report style
-deep-research --inspect 3                       # show metadata, sub-questions, sources, iterations, summary
-deep-research --inspect 3 --full                # also print the full detailed findings
-deep-research --inspect 3 --source 5            # deep dive on source #5 (findings + evidence quotes)
-deep-research --delete 5                        # remove a session
+# Session management (subcommands)
+deep-research history                           # list past sessions (-n N for more)
+deep-research continue 3                        # deepen a previous session
+deep-research continue 3 --depth deep           # deepen with a deeper shape
+deep-research fork 3                            # copy session 3 into a new session (original untouched)
+deep-research fork 3 "narrower angle on X"      # fork with a different query
+deep-research resynthesize 3                    # re-run only synthesis on session 3's sources, save as fork
+deep-research resynthesize 3 --style academic   # same, but with a different report style
+deep-research inspect 3                         # show metadata, sub-questions, sources, iterations, summary
+deep-research inspect 3 --full                  # also print the full detailed findings
+deep-research inspect 3 --source 5              # deep dive on source #5 (findings + evidence quotes)
+deep-research delete 5                          # remove a session (confirms on a terminal)
 ```
+
+Credential subcommands: `deep-research setup`, `login [KEY]`, `logout [KEY|all]`, `keys`.
+System subcommands: `deep-research status` (resolved model route, credentials, file paths), `migrate [PATH]`, `help [COMMAND]`.
+`continue` and `resynthesize` accept the same shape flags as one-shot runs (`--depth`, `--academic`, `--template`, `--style`, `--fresh`).
+
+### Getting help
+
+```bash
+deep-research --help               # all options (with value meanings), commands, examples
+deep-research continue --help      # one command: usage, arguments, options, examples
+deep-research help continue        # same, as a command
+deep-research --version
+```
+
+Help is generated from the same command registry and parsers the CLI runs on, so it can't drift from what is actually accepted. Usage mistakes print the error, the command's usage line and a pointer to `--help` (exit code 2).
 
 ### Flag reference
 
@@ -155,17 +174,7 @@ deep-research --delete 5                        # remove a session
 | `--template`             | `technology` \| `science` \| `market` \| `literature` | —    | Domain-specific prompts and defaults                     |
 | `--agent`                | —                                             | off        | Autonomous decision loop instead of fixed iterations     |
 | `--academic`             | —                                             | off        | Adds arXiv + Semantic Scholar                            |
-| `--thinking`             | —                                             | off        | Enables chain-of-thought reasoning in the GLM client     |
 | `--fresh`                | —                                             | off        | Disables cross-session URL deduplication                 |
-| `--history`              | —                                             | —          | Lists stored sessions and exits                          |
-| `--continue-session ID`  | integer                                       | —          | Resumes and deepens a prior session (gap-analysis loop; `--agent` is not applied) |
-| `--fork-session ID`      | integer                                       | —          | Copies a session into a new branch; original untouched   |
-| `--fork-query "..."`     | string                                        | —          | Used with `--fork-session` to set a different query      |
-| `--resynthesize ID`      | integer                                       | —          | Re-runs synthesis on stored sources; saved as a child fork |
-| `--inspect ID`           | integer                                       | —          | Prints session metadata, sources, iterations, summary    |
-| `--full`                 | —                                             | off        | With `--inspect`: also prints the full detailed findings |
-| `--source N`             | integer                                       | —          | With `--inspect`: deep dive on source #N (1-based)       |
-| `--delete ID`            | integer                                       | —          | Deletes a stored session                                 |
 
 ## Search Sources
 
@@ -182,11 +191,13 @@ When no Tavily key is set, DuckDuckGo is the primary web search. Academic provid
 
 ## Depth Presets
 
-| Depth      | Sub-questions | Results/query | Pages scraped | Iterations | Thinking | Academic | Extraction |
-|------------|:------------:|:-------------:|:-------------:|:----------:|:--------:|:--------:|:----------:|
-| `quick`    | 3            | 3             | 2             | 1          |          |          |            |
-| `standard` | 5            | 5             | 3             | 2          |          |          |            |
-| `deep`     | 7            | 7             | 5             | 3          | yes      | yes      | yes        |
+| Depth      | Sub-questions | Results/query | Pages scraped | Iterations | Academic | Extraction |
+|------------|:------------:|:-------------:|:-------------:|:----------:|:--------:|:----------:|
+| `quick`    | 3            | 3             | 2             | 1          |          |            |
+| `standard` | 5            | 5             | 3             | 2          |          |            |
+| `deep`     | 7            | 7             | 5             | 3          | yes      | yes        |
+
+Thinking mode is always on — models that don't support the thinking payload are gated off automatically (or reason natively), so no flag is needed.
 
 Pages beyond the scrape budget fall back to search-snippet sources instead of being fetched.
 
@@ -230,48 +241,66 @@ Run `deep-research` with no arguments to drop into the REPL:
 > /quit
 ```
 
-Anything not starting with `/` runs as a research query using the current settings. Slash commands change settings or browse history without leaving the session. Up/down arrows navigate command history; history persists in `~/.config/deep-research/repl_history`.
+Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`academic`, `agent`, `fresh`), provider/route — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
+
+Seeing your options:
+
+- `/help` lists every command grouped by purpose (Research, Model, Sessions, Credentials, General), with the allowed values under each setting; `/help depth` explains one command.
+- A setting command with options is a picker: type `/depth` and press Enter, and an arrow-key list opens (`quick`, `standard`, `deep`, each with what it does, the current one marked). ↑/↓ (or j/k) move, Enter selects, 1-9 jump straight to an item, Esc cancels. The same works for `/style`, `/template`, `/provider` and `/route`. Typing the value yourself (`/depth deep`) skips the picker, and setting a value echoes its meaning.
+- **Nothing is left behind.** Choosing or changing a setting prints no confirmation — the status line above the input box already shows the new state, and the picker disappears when you choose. Screens you read (`/help`, `/status`, `/history`, `/inspect`, `/keys`, `/fork`) open in a viewer that vanishes when you press Enter, Esc or `q` (↑/↓ scroll when it's taller than the screen); if a setting command hits a problem (a bad value, an invalid route) that message appears in the same kind of viewer. `/delete <id>` asks with a Yes/No picker. Commands whose output is the point — runs (`/continue`, `/resynthesize`, your questions) and the credential wizards — print normally.
+- The status line and banner show academic sources whenever a run will use them — switched on with `/academic`, or implied by the `science` / `literature` templates or `deep` depth — and `/status` says which. Only a submitted research question leaves its input box in the scrollback; settings changes don't stack up boxes.
+- A mistyped command suggests the closest match (`/histroy` → `/history`).
 
 | Command | Description |
 |---|---|
 | `/depth [quick\|standard\|deep]` | Show or set research depth |
 | `/style [brief\|standard\|academic]` | Show or set report style |
 | `/template [technology\|science\|market\|literature\|none]` | Set domain template |
-| `/thinking` | Toggle thinking mode |
 | `/academic` | Toggle academic sources (arXiv + Semantic Scholar) |
 | `/agent` | Toggle autonomous agent loop |
-| `/fresh` | Toggle fresh mode (skip URLs from past sessions) |
+| `/fresh` | Toggle fresh mode (revisit URLs from past sessions) |
 | `/provider [zai\|opencode-go]` | Show or switch LLM provider |
 | `/route [balanced\|budget\|quality]` | Show or set route profile |
+| `/model [stage] [model]` | Pick the model for each pipeline stage (`all`, `decompose`, `analyze`, `gap_analysis`, `synthesize`; `default` returns to the profile) |
 | `/setup` | Run the credential setup wizard |
 | `/login [KEY]` | Set a single API key in the OS keyring |
 | `/logout [KEY\|all]` | Clear stored credentials |
 | `/keys` | Show which credentials are stored (never shows values) |
 | `/status` | Show current settings and resolved per-stage models |
-| `/history` | List recent research sessions |
-| `/inspect <id>` | Show a stored session's metadata + summary |
+| `/history [count]` | List recent research sessions |
+| `/inspect <id> [--full] [--source N]` | Show a stored session; `--full` adds the detailed findings, `--source N` one source's evidence |
 | `/continue <id>` | Deepen a stored session with current settings |
 | `/delete <id>` | Delete a stored session (asks for confirmation) |
 | `/fork <id> [query]` | Copy a session into a new branch (optionally with a different query) |
 | `/resynthesize <id>` | Re-run synthesis on a stored session's sources |
 | `/clear` | Clear the screen |
-| `/help` | Show command list |
+| `/help [command]` | Show the command list, or explain one command |
 | `/quit` (`/exit`, `/q`) | Exit the REPL |
 
-One-shot CLI flags still work: `deep-research "topic"`, `deep-research --depth deep --thinking "topic"`, `deep-research --history`, `deep-research --inspect 3`, etc. — see the flag reference above.
+One-shot CLI flags still work: `deep-research "topic"`, `deep-research --depth deep "topic"`, `deep-research history`, `deep-research inspect 3`, etc. — see the flag reference above.
 
 ## Multi-Model Routing
 
-Route pipeline stages to different models for cost/quality tradeoffs:
+Each pipeline stage (`decompose`, `analyze`, `gap_analysis`, `synthesize`) can use a different model. The default on Z.AI is **`glm-5.3`**, with the cheaper `glm-4.5-air` on the high-volume stages of the `balanced` and `budget` profiles. There are three ways to change it, from quickest to most permanent:
+
+**1. In the REPL (this session only).** Type `/model` and press Enter: pick a stage (or `all`), then a model from the list — `default` returns a stage to its profile's model. Or type it: `/model analyze glm-5.1`, `/model all glm-5.3`, `/model synthesize default`. `/route` switches the whole preset (`balanced`, `budget`, `quality`), and `/status` shows what each stage resolves to.
+
+**2. A route profile** in `.env` — a named preset that fills all four stages:
+
+```env
+LLM_ROUTE=balanced   # balanced | budget | quality
+```
+
+**3. Per-stage overrides** in `.env` (these win over the profile; leave a stage empty to use the profile's model):
 
 ```env
 MODEL_DECOMPOSE=glm-4.5-air      # fast/cheap for decomposition
-MODEL_ANALYZE=glm-5.1             # thinking model for analysis
-MODEL_SYNTHESIZE=glm-5.1          # best model for synthesis
-MODEL_GAP_ANALYSIS=glm-5.1        # thinking model for gap detection
+MODEL_ANALYZE=glm-5.3            # thinking model for analysis
+MODEL_SYNTHESIZE=glm-5.3         # best model for synthesis
+MODEL_GAP_ANALYSIS=glm-5.3       # thinking model for gap detection
 ```
 
-Leave empty to use `GLM_MODEL` for everything.
+`GLM_MODEL` (default `glm-5.3`) is the provider's default model — what `status` reports and what any call without a stage model uses. Registered Z.AI models are `glm-5.3`, `glm-5.1`, `glm-5` and `glm-4.5-air`; a name that isn't registered is accepted with a warning (its thinking and endpoint support are then unverified), and a model registered only for another provider is refused.
 
 ## Rate Limits & Concurrency
 
@@ -341,7 +370,11 @@ source — cap it there rather than throttling your editor.
 
 ```
 src/deep_research/
-  main.py                  CLI entrypoint
+  main.py                  CLI entrypoint + command dispatch
+  cli_help.py              Command registry, rich --help, styled usage errors
+  options.py               Option values + what they mean (shared by help and REPL)
+  ui.py                    Shared theme, console, glyphs, panels
+  views.py                 Shared screens: banner, history, inspect, status, saved card
   repl.py                  Interactive REPL
   config.py                Settings from .env
   credentials.py           OS-keyring credential access

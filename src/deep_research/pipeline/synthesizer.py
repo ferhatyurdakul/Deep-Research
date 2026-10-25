@@ -310,13 +310,13 @@ async def asynthesize_report_safe(
         return executive, detailed, follow_ups, True
     except Exception as exc:  # noqa: BLE001 — resilience path, see docstring
         logger.error(
-            "Synthesis stage failed (%s); preserving sources for --resynthesize.", exc
+            "Synthesis stage failed (%s); preserving sources for `resynthesize`.", exc
         )
         executive = (
             "## Synthesis incomplete\n\n"
             f"Report synthesis failed: `{exc}`\n\n"
             "The collected source analyses were preserved. Re-run synthesis "
             "without repeating search/extraction using "
-            "`deep-research --resynthesize <session_id>` once the provider recovers."
+            "`deep-research resynthesize <session_id>` once the provider recovers."
         )
         return executive, "", [], False
