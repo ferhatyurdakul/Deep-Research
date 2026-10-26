@@ -224,7 +224,7 @@ class TestViews:
     def test_status_renders_without_credentials(self, capsys):
         views.print_status(shape=[("depth", "deep")])
         out = capsys.readouterr().out
-        for title in ("Model", "Credentials", "Files", "This session"):
+        for title in ("Provider", "Stage models", "Credentials", "Files", "This session"):
             assert title in out
 
     def test_banner_shows_query_and_shape(self, capsys):
@@ -313,7 +313,7 @@ class TestMainFlows:
 
     def test_status_command(self, monkeypatch, capsys):
         code, out, _ = _run(["status"], monkeypatch, capsys)
-        assert code == 0 and "Model" in out
+        assert code == 0 and "Stage models" in out
 
 
 # --- ui helpers --------------------------------------------------------------
@@ -487,14 +487,23 @@ class TestProblemCounter:
 
 
 class TestModelHelpers:
-    def test_model_choices_put_the_default_first_and_describe_each(self):
+    def test_model_choices_list_current_models_flagship_first_and_describe_each(self):
         from deep_research.options import model_choices
 
-        rows = model_choices("zai", preferred="glm-5.3")
-        assert rows[0][0] == "glm-5.3"
-        assert {"glm-5", "glm-5.1", "glm-4.5-air"} <= {m for m, _ in rows}
+        rows = model_choices("zai")
+        assert [m for m, _ in rows] == ["glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1"]
         blurbs = dict(rows)
-        assert "production" in blurbs["glm-5.3"] and "no thinking" in blurbs["glm-4.5-air"]
+        assert "production" in blurbs["glm-5.3"] and "thinking" in blurbs["glm-5.3-flash"]
+        assert "glm-4.5-air" not in blurbs  # legacy models are registered but not offered
+
+    def test_model_choices_tag_the_recommendation_for_a_stage(self):
+        from deep_research.options import model_choices
+
+        analyze = dict(model_choices("zai", "analyze"))
+        assert analyze["glm-5.3-flash"].startswith("recommended")
+        assert not analyze["glm-5.3"].startswith("recommended")
+        synth = dict(model_choices("zai", "synthesize"))
+        assert synth["glm-5.3"].startswith("recommended")
 
     def test_stage_summary(self):
         from deep_research.options import stage_summary
@@ -510,10 +519,7 @@ class TestModelHelpers:
     def test_banner_shows_what_each_stage_uses(self, monkeypatch, capsys):
         from deep_research.config import Settings
 
-        monkeypatch.setattr(views, "settings", Settings(
-            llm_provider="zai", zai_api_key="x", llm_route="balanced",
-            model_decompose="", model_analyze="", model_synthesize="", model_gap_analysis="",
-        ))
+        monkeypatch.setattr(views, "settings", Settings(llm_provider="zai", zai_api_key="x"))
         views.print_banner(shape="standard depth")
         out = " ".join(capsys.readouterr().out.split())
-        assert "glm-5.3 · glm-4.5-air for decompose via zai" in out
+        assert "glm-5.3-flash · glm-5.3 for gap+synthesize via zai" in out

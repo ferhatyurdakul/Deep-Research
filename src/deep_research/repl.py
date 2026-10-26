@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import os
 import shlex
 import shutil
 import sys
@@ -31,17 +32,21 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__, views
+from . import options as _options
+from . import userconfig
 from .capabilities import (
-    PIPELINE_STAGES, CapabilityViolation, known_profiles, lookup, registered_providers_for,
+    PIPELINE_STAGES, CapabilityViolation, lookup, registered_providers_for,
 )
 from .config import _PROVIDER_PROTOCOLS, _xdg_config_home, settings
-from .interactive import pick_option, show_view
+from .interactive import ask_text, pick_option, show_view
 from .models import ReportStyle, ResearchConfig, ResearchDepth
-from .options import academic_reason, depth_choices, model_choices, style_choices, template_choices
+from .onboarding import needs_setup, run_setup
+from .options import (
+    STAGE_BLURBS, academic_reason, depth_choices, model_choices, style_choices, template_choices,
+)
 from .setup_wizard import (
     run_login,
     run_logout,
-    run_setup_wizard,
     show_keys_status,
 )
 from .storage.db import (
@@ -232,13 +237,6 @@ def _provider_choices() -> list:
     return [(name, f"endpoints: {', '.join(families)}") for name, families in _PROVIDER_PROTOCOLS.items()]
 
 
-def _route_choices() -> list:
-    try:
-        return [(name, "") for name in known_profiles(settings.active_provider)]
-    except Exception:
-        return []
-
-
 def _cmd_provider(state: ReplState, args: list) -> None:
     if not args:
         try:
@@ -256,22 +254,8 @@ def _cmd_provider(state: ReplState, args: list) -> None:
         settings.llm_provider = original
         fail(f"Cannot switch to {escape(repr(val))}: {escape(str(e))}")
         return
+    userconfig.set_provider(settings.active_provider)  # chosen in the app, so it sticks
     ok(f"Provider: [bold]{settings.active_provider}[/bold] ({info['endpoint_family']})")
-
-
-def _cmd_route(state: ReplState, args: list) -> None:
-    if not args:
-        _print_choices("Route profile", settings.llm_route, _route_choices(), "/route")
-        return
-    original = settings.llm_route
-    settings.llm_route = args[0]
-    try:
-        settings.validate_routes()
-    except (CapabilityViolation, ValueError) as e:
-        settings.llm_route = original
-        fail(f"Cannot switch route: {escape(str(e))}")
-        return
-    ok(f"Route: [bold]{settings.llm_route}[/bold]")
 
 
 def _cmd_status(state: ReplState, args: list) -> None:
@@ -385,13 +369,9 @@ def _cmd_resynthesize(state: ReplState, args: list) -> None:
         pass
 
 
-_STAGE_ATTRS = {
-    "decompose": "model_decompose",
-    "analyze": "model_analyze",
-    "gap_analysis": "model_gap_analysis",
-    "synthesize": "model_synthesize",
-}
+_STAGE_NAMES = tuple(PIPELINE_STAGES)
 _DEFAULT_WORDS = ("default", "profile", "reset")
+_SOURCE_LABELS = {"environment": "from your environment", "saved": "saved", "recommended": "recommended"}
 
 
 def _stage_models() -> dict:
@@ -401,31 +381,43 @@ def _stage_models() -> dict:
         return {}
 
 
+def _stage_sources() -> dict:
+    try:
+        return settings.stage_sources()
+    except Exception:
+        return {}
+
+
 def _model_stage_choices() -> list:
-    """`all` plus each stage with the model it uses now."""
-    stages, overrides = _stage_models(), settings.stage_models()
+    """`all` plus each stage: what it does and the model it uses now."""
+    stages, sources = _stage_models(), _stage_sources()
     rows = [("all", "Every stage")]
     for stage in PIPELINE_STAGES:
         model = stages.get(stage, "?")
-        rows.append((stage, f"{model}" + ("  (set by you)" if stage in overrides else "  (route profile)")))
+        rows.append((stage, f"{model} ({_SOURCE_LABELS.get(sources.get(stage, ''), '')}) — {STAGE_BLURBS[stage]}"))
     return rows
 
 
-def _model_pick_list() -> list:
-    """Models for the active provider, then the way back to the profile's pick."""
+def _model_pick_list(stage: Optional[str] = None, account: Optional[list] = None) -> list:
+    """Models for the active provider, an escape hatch for any other ID, and
+    the way back to the recommendation. `account` is the provider's live model
+    list when we have it (see options.fetch_account_models)."""
     try:
         provider = settings.active_provider
     except Exception:
         return []
-    rows = model_choices(provider, preferred=settings.active_model)
-    return rows + [("default", "Use the route profile's model")]
+    rows = model_choices(provider, stage if stage in _STAGE_NAMES else None, account)
+    return rows + [
+        ("other", "Type another model ID"),
+        ("default", "Back to the recommended model"),
+    ]
 
 
 def _model_arg_choices(previous: list) -> list:
     if not previous:
         return _model_stage_choices()
     if len(previous) == 1:
-        return _model_pick_list()
+        return [row for row in _model_pick_list(previous[0]) if row[0] != "other"]
     return []
 
 
@@ -435,26 +427,27 @@ def _cmd_model(state: ReplState, args: list) -> None:
         grid.add_column(style="cmd", no_wrap=True)
         grid.add_column(no_wrap=True)
         grid.add_column(style="muted")
-        overrides = settings.stage_models()
+        sources = _stage_sources()
         for stage, model in _stage_models().items():
-            grid.add_row(stage, model, "set by you" if stage in overrides else f"{settings.llm_route} profile")
+            grid.add_row(stage, model, _SOURCE_LABELS.get(sources.get(stage, ""), ""))
         console.print(_indent(grid))
         note("Change one with /model <stage|all> <model|default>.")
         return
 
     stage = args[0].lower().replace("-", "_")
     stages = list(PIPELINE_STAGES) if stage == "all" else [stage]
-    if stage != "all" and stage not in _STAGE_ATTRS:
+    if stage != "all" and stage not in _STAGE_NAMES:
         fail(f"Unknown stage {escape(repr(args[0]))}.", hint="Stages: all, " + ", ".join(PIPELINE_STAGES))
         return
     if len(args) < 2:
-        fail(f"Usage: /model {stage} <model|default>", hint="Models: " + ", ".join(v for v, _ in _model_pick_list()))
+        fail(f"Usage: /model {stage} <model|default>",
+             hint="Models: " + ", ".join(v for v, _ in _model_pick_list() if v != "other"))
         return
 
     model = args[1]
     clear = model.lower() in _DEFAULT_WORDS
+    provider = settings.active_provider
     if not clear:
-        provider = settings.active_provider
         if lookup(provider, model) is None:
             elsewhere = registered_providers_for(model)
             if elsewhere:
@@ -463,18 +456,22 @@ def _cmd_model(state: ReplState, args: list) -> None:
                 return
             warn(f"{escape(model)} is not in the capability registry; thinking and endpoint support are unverified.")
 
-    original = {s: getattr(settings, _STAGE_ATTRS[s]) for s in stages}
+    previous = userconfig.stage_models(provider)
     for s in stages:
-        setattr(settings, _STAGE_ATTRS[s], "" if clear else model)
+        userconfig.set_stage_model(provider, s, None if clear else model)
     try:
         settings.validate_routes()
     except (CapabilityViolation, ValueError) as e:
-        for s, value in original.items():
-            setattr(settings, _STAGE_ATTRS[s], value)
+        userconfig.save_choices(provider, previous)  # put back exactly what was saved
         fail(f"Cannot use {escape(model)}: {escape(str(e))}")
         return
+
     target = "every stage" if stage == "all" else stage
-    ok(f"Model for {target}: [bold]{'route profile default' if clear else escape(model)}[/bold]")
+    ok(f"Model for {target}: [bold]{'the recommended model' if clear else escape(model)}[/bold]")
+    shadowed = [s for s in stages if os.getenv(f"MODEL_{s.upper()}")]
+    if shadowed:
+        warn("Saved, but " + ", ".join(f"MODEL_{s.upper()}" for s in shadowed)
+             + " is set in your environment and overrides it.")
 
 
 def _model_interactive(state: ReplState, args: list, line: str) -> Optional[str]:
@@ -486,18 +483,32 @@ def _model_interactive(state: ReplState, args: list, line: str) -> Optional[str]
         stage = pick_option("Model · which stage?", _model_stage_choices(), None)
         if stage is None:
             return None
-    elif stage != "all" and stage not in _STAGE_ATTRS:
+    elif stage != "all" and stage not in _STAGE_NAMES:
         return line  # let the handler explain the typo
-    models = _model_pick_list()
-    if not models:
-        return line
     stages = _stage_models()
     if stage == "all":
         used = set(stages.values())
         current = used.pop() if len(used) == 1 else None
     else:
         current = stages.get(stage)
-    model = pick_option(f"Model for {'every stage' if stage == 'all' else stage}", models, current)
+    try:
+        account = _options.fetch_account_models(settings.active_provider)
+    except Exception:
+        account = None
+    while True:
+        models = _model_pick_list(stage, account)
+        if not models:
+            return line
+        title = f"Model for {'every stage' if stage == 'all' else stage}"
+        model = pick_option(title, models, current)
+        if model != "other":
+            break
+        model = ask_text(title, hint="Any ID your provider serves")
+        if model is None:
+            return None
+        if model.strip():
+            model = model.strip()
+            break
     return None if model is None else f"/model {stage} {model}"
 
 
@@ -517,7 +528,7 @@ def _cmd_clear(state: ReplState, args: list) -> None:
 
 
 def _cmd_setup(state: ReplState, args: list) -> None:
-    run_setup_wizard()
+    run_setup()
 
 
 def _cmd_login(state: ReplState, args: list) -> None:
@@ -616,14 +627,12 @@ COMMANDS: tuple = (
             details="By default, pages analyzed in earlier sessions are skipped so each run finds new material.", display="silent"),
     Command("/provider", _cmd_provider, "Show or switch the LLM provider", "[zai|opencode-go]",
             group="Model", choices=_provider_choices, current=lambda s: _safe(lambda: settings.active_provider), display="silent"),
-    Command("/route", _cmd_route, "Show or set the route profile", "[balanced|budget|quality]",
-            group="Model", choices=_route_choices, current=lambda s: settings.llm_route,
-            details="Which model each pipeline stage uses. Available profiles depend on the provider.", display="silent"),
-    Command("/model", _cmd_model, "Show or change the model used by each stage", "[stage] [model]",
+    Command("/model", _cmd_model, "Choose the model for each pipeline stage", "[stage] [model]",
             group="Model", choices=_model_stage_choices, arg_choices=_model_arg_choices,
             interactive=_model_interactive, display="silent",
-            details="Stages: decompose, analyze, gap_analysis, synthesize, or all. 'default' returns a stage "
-                    "to the route profile's model. Lasts for this session; set MODEL_<STAGE> in .env to keep it."),
+            details="Stages: decompose, analyze, gap_analysis, synthesize, or all. Your choice is saved; "
+                    "'default' returns a stage to the recommended model. A MODEL_<STAGE> environment "
+                    "variable overrides it."),
     Command("/status", _cmd_status, "Show settings, resolved models and credentials", group="Model", display="view"),
     Command("/history", _cmd_history, "List recent research sessions", "[count]", group="Sessions", display="view"),
     Command("/inspect", _cmd_inspect, "Show a stored session", "<id> [options]",
@@ -638,7 +647,7 @@ COMMANDS: tuple = (
             group="Sessions",
             details="No searching: re-runs only synthesis, using the current style and template."),
     Command("/delete", _cmd_delete, "Delete a stored session", "<id>", group="Sessions", display="silent", interactive=_delete_interactive),
-    Command("/setup", _cmd_setup, "Run the credential setup wizard", group="Credentials"),
+    Command("/setup", _cmd_setup, "Set up provider, API key and models", group="Credentials"),
     Command("/login", _cmd_login, "Store a single API key in the keyring", "[KEY_NAME]", group="Credentials"),
     Command("/logout", _cmd_logout, "Clear stored credentials", "[KEY_NAME|all]", group="Credentials"),
     Command("/keys", _cmd_keys, "Show which credentials are stored (never shows values)", group="Credentials", display="view"),
@@ -824,7 +833,7 @@ def _status_fragments(state: "ReplState") -> list:
     non-standard style, and active toggles only when set — no noise for
     defaults, no always-on flags like thinking."""
     try:
-        provider = f"{settings.active_provider}/{settings.llm_route}"
+        provider = settings.active_provider
     except Exception:
         provider = "invalid config"
     frags = [("class:depth", f" {state.depth.value}")]
@@ -1080,6 +1089,12 @@ async def _run_query(state: ReplState, query: str) -> None:
 def run_repl(initial_state: Optional[ReplState] = None) -> None:
     """Entry point: print the banner, loop on input, dispatch."""
     state = initial_state or ReplState()
+
+    # Nothing to run on yet (no API key): open setup first. Terminal only, so
+    # pipes and scripts are never blocked, and Esc skips it.
+    if sys.stdin is not None and sys.stdin.isatty() and needs_setup():
+        run_setup(first_run=True)
+
     _print_banner(state)
 
     # prompt_toolkit drives the interactive UI (boxed input, slash-command

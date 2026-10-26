@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 
 from deep_research.llm import achat, achat_json
@@ -262,10 +263,13 @@ def _split_report(report_text: str) -> tuple[str, str]:
     structure, so the full report still renders without being duplicated.
     """
     lines = report_text.strip().split("\n")
-    # Drop a leading H1 title ("# ...", not "## ...") and the metadata line.
+    # Drop a leading H1 title ("# ...", not "## ..."), the metadata line, and
+    # any horizontal rule the model puts between them and the first section
+    # (glm-5.3 does) — a rule left behind would hide the "## " that follows.
     while lines and (
         (lines[0].startswith("# ") and not lines[0].startswith("## "))
         or lines[0].strip().startswith("**Date:")
+        or re.fullmatch(r"[-*_]{3,}", lines[0].strip())
         or not lines[0].strip()
     ):
         lines.pop(0)

@@ -382,9 +382,9 @@ def _ensure_ready() -> None:
         key_missing = False
     if not key_missing:
         fail(
-            "Route validation failed.",
-            hint="Fix LLM_PROVIDER / LLM_ROUTE / model settings above and re-run "
-                 f"(`{PROG} status` shows what is resolved).",
+            "Provider or model configuration is invalid.",
+            hint="Fix LLM_PROVIDER / MODEL_<STAGE> above and re-run, or choose models with "
+                 f"`{PROG} setup` (`{PROG} status` shows what is resolved).",
         )
         sys.exit(1)
 
@@ -393,18 +393,16 @@ def _ensure_ready() -> None:
     if not tty():
         note(f"Run `{PROG} setup` to store credentials, or set {settings.active_api_key_env_name} in your environment.")
         sys.exit(1)
-    if not Confirm.ask("[bold]Run the credential setup wizard now?[/bold]", default=True):
-        note(f"Run `{PROG} setup` to store credentials, or set {settings.active_api_key_env_name} in your environment.")
-        sys.exit(1)
 
-    from .setup_wizard import run_setup_wizard
-    run_setup_wizard()
+    # The setup screen is the offer: Esc skips it.
+    from .onboarding import run_setup
+    run_setup(first_run=True)
     settings.reload_credentials()
     if not settings.active_api_key:
         fail(f"Still no {settings.active_api_key_env_name} configured. Exiting.")
         sys.exit(1)
     if not check_config():
-        fail("Route validation failed.", hint="Fix the configuration above and re-run.")
+        fail("Provider or model configuration is invalid.", hint="Fix the configuration above and re-run.")
         sys.exit(1)
 
 
@@ -450,8 +448,9 @@ def _do_resynthesize(ns: argparse.Namespace) -> None:
 
 
 def _do_setup(ns: argparse.Namespace) -> None:
-    from .setup_wizard import run_setup_wizard
-    run_setup_wizard()
+    from .onboarding import run_setup
+    if not run_setup() and not tty():
+        sys.exit(1)  # nothing can be set up without a terminal; scripts should see that
 
 
 def _do_login(ns: argparse.Namespace) -> None:
@@ -511,6 +510,16 @@ def run_command(name: str, argv: list) -> None:
     HANDLERS[name](build_command_parser(name).parse_args(argv))
 
 
+def _warn_retired_settings() -> None:
+    """Routes were replaced by per-stage models; say so once if the old
+    setting is still around instead of silently ignoring it."""
+    if os.getenv("LLM_ROUTE"):
+        warn(
+            "LLM_ROUTE is no longer used — routes were replaced by a model per stage. "
+            f"Remove it from your environment or .env, and choose models with `{PROG} setup` or /model."
+        )
+
+
 def main() -> None:
     # Warnings and errors only by default: the INFO stream is per-call route
     # dumps and result counts that clutter the UI. DEEP_RESEARCH_LOG_LEVEL=INFO
@@ -530,6 +539,7 @@ def main() -> None:
     # usage like `deep-research "topic"` skips the REPL.
     if not args.query:
         from .repl import ReplState, run_repl
+        _warn_retired_settings()
         run_repl(ReplState(
             depth=ResearchDepth(args.depth),
             style=ReportStyle(args.style),
@@ -546,6 +556,7 @@ def main() -> None:
         sys.exit(1)
 
     config = build_config(args)
+    _warn_retired_settings()
     views.print_banner(shape=views.shape_from_namespace(args), query=query)
 
     # Heuristic warning: deep depth + agent mode on opencode-go can burn

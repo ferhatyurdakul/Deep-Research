@@ -61,6 +61,9 @@ class ModelCapability(BaseModel):
     context_window: Optional[int] = None
     tier: str = "experimental"
     notes: str = ""
+    # Shown in model pickers. Older models stay registered (so existing configs
+    # validate and keep their capability metadata) but are hidden from the lists.
+    listed: bool = True
 
     def supports_family(self, family: str) -> bool:
         return family in self.endpoint_families
@@ -87,40 +90,41 @@ def _register(cap: ModelCapability) -> None:
 
 
 # --- Z.AI ---
-# Existing models the project has been running on. Endpoint family is openai-only
-# because Z.AI's coding paas v4 is the OpenAI-compatible endpoint.
-# glm-5.3: current default. Same OpenAI-compatible endpoint and thinking payload
-# as the other GLM-5.x entries; registered with that family's capabilities.
-_register(ModelCapability(
-    provider="zai", model_id="glm-5.3",
-    endpoint_families=frozenset({"openai"}),
-    thinking_supported=True,
-    thinking_dialect="zai-extra-body",
-    tier="production",
-    notes="Default model",
-))
-_register(ModelCapability(
-    provider="zai", model_id="glm-5",
-    endpoint_families=frozenset({"openai"}),
-    thinking_supported=True,
-    thinking_dialect="zai-extra-body",
-    tier="production",
-))
-_register(ModelCapability(
-    provider="zai", model_id="glm-5.1",
-    endpoint_families=frozenset({"openai"}),
-    thinking_supported=True,
-    thinking_dialect="zai-extra-body",
-    tier="production",
-))
-_register(ModelCapability(
-    provider="zai", model_id="glm-4.5-air",
-    endpoint_families=frozenset({"openai"}),
-    thinking_supported=False,
-    thinking_dialect="none",
-    tier="production",
-    notes="Lighter/faster GLM used for decomposition stage in some configs.",
-))
+# Current lineup per https://docs.z.ai/guides/overview/pricing and the model
+# pages (checked 2026-10-25). All of them are reached through the
+# OpenAI-compatible endpoint, with thinking requested via the zai-extra-body
+# payload. glm-5.3 and glm-5.3-flash force thinking on (it cannot be disabled).
+#
+# Tier: "production" only for models exercised live from this codebase; the
+# rest are "experimental" until someone runs them through the pipeline.
+# `listed=False` keeps a legacy model registered but out of the pickers.
+_ZAI_MODELS: tuple[tuple[str, "Optional[bool]", str, bool, str], ...] = (
+    # (model_id, thinking_supported, tier, listed, notes)
+    ("glm-5.3",        True,  "production",   True,
+        "Flagship. 1M context. Thinking is always on."),
+    ("glm-5.3-flash",  True,  "production",   True,
+        "Low-cost tier, stronger than GLM-5.2. Coding Plan: 3x the quota of glm-5.3."),
+    ("glm-5.3-flashx", True,  "experimental", True,
+        "Speed tier. Rejected on the Coding Plan (error 1311) even though it is listed."),
+    ("glm-5.2",        True,  "production",   True,
+        "Previous generation."),
+    ("glm-5.1",        True,  "production",   True,
+        "Previous generation."),
+    ("glm-5",          True,  "production",   False, "Legacy."),
+    ("glm-4.5-air",    False, "production",   False, "Legacy light model; no thinking mode."),
+)
+
+for _mid, _thinking, _tier, _listed, _notes in _ZAI_MODELS:
+    _register(ModelCapability(
+        provider="zai",
+        model_id=_mid,
+        endpoint_families=frozenset({"openai"}),
+        thinking_supported=_thinking,
+        thinking_dialect="zai-extra-body" if _thinking else "none",
+        tier=_tier,
+        listed=_listed,
+        notes=_notes,
+    ))
 
 
 # --- OpenCode Go ---
@@ -169,20 +173,23 @@ for _mid, _families, _thinking, _dialect, _tier, _notes in _OPENCODE_GO_MODELS:
     ))
 
 
-# --- Recommended stage routes ---
+# --- Pipeline stages and recommended models ---
 #
-# Named profiles that fill the four pipeline stages with sensible defaults.
-# Per-stage env vars (MODEL_DECOMPOSE / MODEL_ANALYZE / MODEL_SYNTHESIZE /
-# MODEL_GAP_ANALYSIS) still win when set; the profile is the fallback.
+# The pipeline has four stages that call the LLM. Which model each one uses is
+# the user's choice (setup, `/model`, or MODEL_<STAGE> in the environment); the
+# table below is only what setup pre-selects and what a run falls back to when
+# nothing has been chosen yet.
 #
-# Conservative bias: the default profile uses production-tier models only.
-# "quality" and "budget" profiles deliberately reach into experimental tier;
-# we surface that at startup so the user knows what they signed up for.
+# Z.AI: the many `analyze` calls (one per source) and the simple `decompose`
+# call use the low-cost flash model; the rare, quality-critical `gap_analysis`
+# and `synthesize` calls use the flagship.
+# OpenCode Go: only the GLMs are production-tier there, so every stage uses
+# glm-5.1 (no model mixing, no surprises); not revisited yet.
 
 PIPELINE_STAGES: tuple[str, ...] = ("decompose", "analyze", "gap_analysis", "synthesize")
 
 
-class StageRoute(BaseModel):
+class StageModels(BaseModel):
     decompose: str
     analyze: str
     gap_analysis: str
@@ -197,77 +204,32 @@ class StageRoute(BaseModel):
         }
 
 
-# Keyed by (provider, profile_name).
-RECOMMENDED_ROUTES: dict[tuple[str, str], StageRoute] = {
-    # Z.AI: cheap GLM for decomposition, full GLM-5.3 for analysis/gap/synthesis.
-    ("zai", "balanced"): StageRoute(
-        decompose="glm-4.5-air",
-        analyze="glm-5.3",
+RECOMMENDED_STAGE_MODELS: dict[str, StageModels] = {
+    "zai": StageModels(
+        decompose="glm-5.3-flash",
+        analyze="glm-5.3-flash",
         gap_analysis="glm-5.3",
         synthesize="glm-5.3",
     ),
-    # Z.AI "budget": the cheap air model carries the high-volume iterative
-    # stages; quality-sensitive gap-analysis/synthesis stay on glm-5.3.
-    ("zai", "budget"): StageRoute(
-        decompose="glm-4.5-air",
-        analyze="glm-4.5-air",
-        gap_analysis="glm-5.3",
-        synthesize="glm-5.3",
-    ),
-    # Z.AI "quality": strongest registered model on every stage.
-    ("zai", "quality"): StageRoute(
-        decompose="glm-5.3",
-        analyze="glm-5.3",
-        gap_analysis="glm-5.3",
-        synthesize="glm-5.3",
-    ),
-    # OpenCode Go: only the GLMs are production-tier here, so the safe
-    # default keeps every stage on glm-5.1. No model mixing, no surprises.
-    ("opencode-go", "balanced"): StageRoute(
+    "opencode-go": StageModels(
         decompose="glm-5.1",
         analyze="glm-5.1",
         gap_analysis="glm-5.1",
         synthesize="glm-5.1",
-    ),
-    # Cheaper iterative loop with experimental models for decomposition and
-    # source analysis (high volume), keeping GLM-5.1 for the
-    # quality-sensitive gap-analysis and synthesis stages.
-    ("opencode-go", "budget"): StageRoute(
-        decompose="deepseek-v4-flash",
-        analyze="deepseek-v4-flash",
-        gap_analysis="glm-5.1",
-        synthesize="glm-5.1",
-    ),
-    # Bias toward the strongest reasoning model we have wired in for the
-    # synthesis stage; iterative stages stay on GLM-5.1.
-    ("opencode-go", "quality"): StageRoute(
-        decompose="glm-5.1",
-        analyze="glm-5.1",
-        gap_analysis="glm-5.1",
-        synthesize="deepseek-v4-pro",
     ),
 }
 
-DEFAULT_PROFILE: str = "balanced"
 
-
-def known_profiles(provider: str) -> list[str]:
-    return sorted(name for (p, name) in RECOMMENDED_ROUTES if p == provider)
-
-
-def resolve_stage_route(provider: str, profile: str) -> StageRoute:
-    """Look up the (provider, profile) route or raise CapabilityViolation."""
-    route = RECOMMENDED_ROUTES.get((provider, profile))
-    if route is None:
-        available = known_profiles(provider) or ["(none)"]
+def recommended_stage_models(provider: str) -> StageModels:
+    """The recommended model for each stage, or CapabilityViolation for an unknown provider."""
+    rec = RECOMMENDED_STAGE_MODELS.get(provider)
+    if rec is None:
         raise CapabilityViolation(
-            f"No route profile {profile!r} defined for provider {provider!r}. "
-            f"Available: {', '.join(available)}"
+            f"No recommended models for provider {provider!r}. "
+            f"Known: {', '.join(sorted(RECOMMENDED_STAGE_MODELS))}"
         )
-    return route
+    return rec
 
-
-# --- Public API ---
 
 def lookup(provider: str, model_id: str) -> ModelCapability | None:
     return _REGISTRY.get((provider, model_id))
@@ -275,6 +237,12 @@ def lookup(provider: str, model_id: str) -> ModelCapability | None:
 
 def known_models(provider: str) -> list[str]:
     return sorted(m for (p, m) in _REGISTRY if p == provider)
+
+
+def listed_models(provider: str) -> list[str]:
+    """Models to offer in pickers, in registration order (flagship first). Legacy
+    entries stay registered, so existing configs validate, but are hidden here."""
+    return [m for (p, m), cap in _REGISTRY.items() if p == provider and cap.listed]
 
 
 def registered_providers_for(model_id: str) -> list[str]:

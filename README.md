@@ -53,13 +53,21 @@ pip install -e ".[dev]"
 
 ### Configure
 
-The recommended way is the interactive setup wizard — keys are stored in your OS keychain, no files to edit:
+The recommended way is the setup screen. It opens by itself the first time you launch `deep-research` in a terminal with no API key, and any time with `deep-research setup` (or `/setup` inside the app):
 
 ```bash
 deep-research setup
 ```
 
-This walks you through entering your `ZAI_API_KEY` (or `OPENCODE_API_KEY`) and optional Tavily / Semantic Scholar keys, then stores them in:
+It walks you through five steps — each one a small picker or prompt that disappears as you go:
+
+1. **Provider** — Z.AI or OpenCode Go.
+2. **API key** — pasted hidden and stored in your OS keychain, never in a file.
+3. **Tavily search key** — optional; better web search than DuckDuckGo alone.
+4. **Models** — accept the recommended models, or pick one for each of the four stages (see **Multi-Model Routing** below). If your provider lists the models your account can use, that list is shown too.
+5. **Connection check** — optional; sends one tiny request per chosen model so a wrong key or a model your plan can't use shows up now.
+
+Esc skips setup at any step (the app then starts normally and tells you how to come back). It never opens outside a terminal, so scripts and pipes are never blocked. Keys are stored in:
 
 - **macOS:** Keychain
 - **Linux:** Secret Service (GNOME Keyring / KWallet)
@@ -87,6 +95,7 @@ Inside the REPL, the same commands are available as slash commands: `/setup`, `/
 |------|------------------|---------|
 | `~/.local/share/deep-research/research.db` | `DEEP_RESEARCH_DATA_DIR` | SQLite session store (XDG_DATA_HOME respected) |
 | `<cwd>/outputs/` | `DEEP_RESEARCH_OUTPUTS_DIR` | Markdown reports — created lazily where you run from |
+| `~/.config/deep-research/config.json` | `DEEP_RESEARCH_CONFIG_FILE` | Your provider and the model for each stage (no secrets) |
 | `~/.config/deep-research/.env` | `XDG_CONFIG_HOME` respected | Global credentials fallback |
 | `~/.config/deep-research/repl_history` | — | REPL command history |
 
@@ -102,7 +111,7 @@ deep-research "your research question"
 
 The bare `deep-research` command launches an interactive prompt where you can type questions directly or use slash commands like `/depth deep`, `/template science`, `/agent`, `/history`, `/continue 3`. See **Interactive Mode** below for the full command list.
 
-Everything is discoverable from the terminal: `deep-research --help` lists every option (with what each value means) and every command, `deep-research COMMAND --help` details one command, and `deep-research status` shows the resolved model route, credentials and file locations.
+Everything is discoverable from the terminal: `deep-research --help` lists every option (with what each value means) and every command, `deep-research COMMAND --help` details one command, and `deep-research status` shows the provider, the model each stage uses, credentials and file locations.
 
 ## CLI Reference
 
@@ -151,7 +160,7 @@ deep-research delete 5                          # remove a session (confirms on 
 ```
 
 Credential subcommands: `deep-research setup`, `login [KEY]`, `logout [KEY|all]`, `keys`.
-System subcommands: `deep-research status` (resolved model route, credentials, file paths), `migrate [PATH]`, `help [COMMAND]`.
+System subcommands: `deep-research status` (provider, the model for each stage and where it comes from, credentials, file paths), `migrate [PATH]`, `help [COMMAND]`.
 `continue` and `resynthesize` accept the same shape flags as one-shot runs (`--depth`, `--academic`, `--template`, `--style`, `--fresh`).
 
 ### Getting help
@@ -241,13 +250,13 @@ Run `deep-research` with no arguments to drop into the REPL:
 > /quit
 ```
 
-Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`academic`, `agent`, `fresh`), provider/route — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
+Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`academic`, `agent`, `fresh`), provider — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
 
 Seeing your options:
 
 - `/help` lists every command grouped by purpose (Research, Model, Sessions, Credentials, General), with the allowed values under each setting; `/help depth` explains one command.
-- A setting command with options is a picker: type `/depth` and press Enter, and an arrow-key list opens (`quick`, `standard`, `deep`, each with what it does, the current one marked). ↑/↓ (or j/k) move, Enter selects, 1-9 jump straight to an item, Esc cancels. The same works for `/style`, `/template`, `/provider` and `/route`. Typing the value yourself (`/depth deep`) skips the picker, and setting a value echoes its meaning.
-- **Nothing is left behind.** Choosing or changing a setting prints no confirmation — the status line above the input box already shows the new state, and the picker disappears when you choose. Screens you read (`/help`, `/status`, `/history`, `/inspect`, `/keys`, `/fork`) open in a viewer that vanishes when you press Enter, Esc or `q` (↑/↓ scroll when it's taller than the screen); if a setting command hits a problem (a bad value, an invalid route) that message appears in the same kind of viewer. `/delete <id>` asks with a Yes/No picker. Commands whose output is the point — runs (`/continue`, `/resynthesize`, your questions) and the credential wizards — print normally.
+- A setting command with options is a picker: type `/depth` and press Enter, and an arrow-key list opens (`quick`, `standard`, `deep`, each with what it does, the current one marked). ↑/↓ (or j/k) move, Enter selects, 1-9 jump straight to an item, Esc cancels. The same works for `/style`, `/template` and `/provider`; `/model` opens a stage picker, then a model picker. Typing the value yourself (`/depth deep`) skips the picker, and setting a value echoes its meaning.
+- **Nothing is left behind.** Choosing or changing a setting prints no confirmation — the status line above the input box already shows the new state, and the picker disappears when you choose. Screens you read (`/help`, `/status`, `/history`, `/inspect`, `/keys`, `/fork`) open in a viewer that vanishes when you press Enter, Esc or `q` (↑/↓ scroll when it's taller than the screen); if a setting command hits a problem (a bad value, an invalid model) that message appears in the same kind of viewer. `/delete <id>` asks with a Yes/No picker. Commands whose output is the point — runs (`/continue`, `/resynthesize`, your questions) and the credential wizards — print normally.
 - The status line and banner show academic sources whenever a run will use them — switched on with `/academic`, or implied by the `science` / `literature` templates or `deep` depth — and `/status` says which. Only a submitted research question leaves its input box in the scrollback; settings changes don't stack up boxes.
 - A mistyped command suggests the closest match (`/histroy` → `/history`).
 
@@ -260,9 +269,8 @@ Seeing your options:
 | `/agent` | Toggle autonomous agent loop |
 | `/fresh` | Toggle fresh mode (revisit URLs from past sessions) |
 | `/provider [zai\|opencode-go]` | Show or switch LLM provider |
-| `/route [balanced\|budget\|quality]` | Show or set route profile |
-| `/model [stage] [model]` | Pick the model for each pipeline stage (`all`, `decompose`, `analyze`, `gap_analysis`, `synthesize`; `default` returns to the profile) |
-| `/setup` | Run the credential setup wizard |
+| `/model [stage] [model]` | Choose and save the model for each pipeline stage (`all`, `decompose`, `analyze`, `gap_analysis`, `synthesize`; `default` returns to the recommendation) |
+| `/setup` | Open the setup screen (provider, API key, models) |
 | `/login [KEY]` | Set a single API key in the OS keyring |
 | `/logout [KEY\|all]` | Clear stored credentials |
 | `/keys` | Show which credentials are stored (never shows values) |
@@ -281,26 +289,35 @@ One-shot CLI flags still work: `deep-research "topic"`, `deep-research --depth d
 
 ## Multi-Model Routing
 
-Each pipeline stage (`decompose`, `analyze`, `gap_analysis`, `synthesize`) can use a different model. The default on Z.AI is **`glm-5.3`**, with the cheaper `glm-4.5-air` on the high-volume stages of the `balanced` and `budget` profiles. There are three ways to change it, from quickest to most permanent:
+A run has four stages that call the model, and each can use a different one:
 
-**1. In the REPL (this session only).** Type `/model` and press Enter: pick a stage (or `all`), then a model from the list — `default` returns a stage to its profile's model. Or type it: `/model analyze glm-5.1`, `/model all glm-5.3`, `/model synthesize default`. `/route` switches the whole preset (`balanced`, `budget`, `quality`), and `/status` shows what each stage resolves to.
+| Stage | What it does | How often |
+|---|---|---|
+| `decompose` | splits your question into sub-questions | once |
+| `analyze` | reads one source and extracts findings and quotes | once per source — most of the calls |
+| `gap_analysis` | decides what is still missing, or when to stop | once per pass |
+| `synthesize` | writes the final cited report | once |
 
-**2. A route profile** in `.env` — a named preset that fills all four stages:
+A cheap, fast model on the easy or high-volume stages and a strong one where quality is decided gives nearly the same report faster and cheaper, and is gentler on rate limits.
 
-```env
-LLM_ROUTE=balanced   # balanced | budget | quality
-```
+**You choose the model for each stage**, in the setup screen or any time with `/model` in the app (the choice is saved, so it sticks):
 
-**3. Per-stage overrides** in `.env` (these win over the profile; leave a stage empty to use the profile's model):
+- `/model` + Enter — pick a stage (or `all`), then a model. The first list says what each stage does and which model it uses now; the second lists the provider's models with what is known about each, the recommended one tagged. `other` lets you type any model ID, and `default` returns a stage to the recommendation.
+- Or type it: `/model analyze glm-5.3-flash`, `/model all glm-5.3`, `/model synthesize default`.
+- `/status` (or `deep-research status`) shows what each stage uses and whether that is **saved**, **recommended** (you never chose), or **from your environment**.
 
-```env
-MODEL_DECOMPOSE=glm-4.5-air      # fast/cheap for decomposition
-MODEL_ANALYZE=glm-5.3            # thinking model for analysis
-MODEL_SYNTHESIZE=glm-5.3         # best model for synthesis
-MODEL_GAP_ANALYSIS=glm-5.3       # thinking model for gap detection
-```
+**Recommended models**, used until you choose (and pre-selected in setup):
 
-`GLM_MODEL` (default `glm-5.3`) is the provider's default model — what `status` reports and what any call without a stage model uses. Registered Z.AI models are `glm-5.3`, `glm-5.1`, `glm-5` and `glm-4.5-air`; a name that isn't registered is accepted with a warning (its thinking and endpoint support are then unverified), and a model registered only for another provider is refused.
+| Provider | decompose | analyze | gap_analysis | synthesize |
+|---|---|---|---|---|
+| Z.AI | `glm-5.3-flash` | `glm-5.3-flash` | `glm-5.3` | `glm-5.3` |
+| OpenCode Go | `glm-5.1` | `glm-5.1` | `glm-5.1` | `glm-5.1` |
+
+**Overriding from the environment** (CI, scripts): `MODEL_DECOMPOSE`, `MODEL_ANALYZE`, `MODEL_GAP_ANALYSIS`, `MODEL_SYNTHESIZE` win over everything saved. `/model` and setup tell you when one of them is shadowing your choice. `LLM_ROUTE` (the old preset system) is gone; the app warns if it is still set.
+
+**Z.AI models** (checked against [Z.AI's docs](https://docs.z.ai/guides/overview/pricing)): `glm-5.3` (flagship, 1M context), `glm-5.3-flash` (low-cost tier; on the Coding Plan with 3× the quota of `glm-5.3`), `glm-5.3-flashx` (speed tier; it appears in the Coding Plan's model list but calls are rejected with error 1311, so it needs a plan that includes it), and the previous generations `glm-5.2` and `glm-5.1`. When Z.AI's API can list the models your account has, the pickers also show those we haven't verified; a model your account lacks is tagged. `glm-5.3` models always think — thinking can't be turned off.
+
+Any ID your provider serves works: a name that isn't in the registry is accepted with a warning (its thinking and endpoint support are then unverified), and a model registered only for another provider is refused. `GLM_MODEL` / `OPENCODE_MODEL` still exist as the provider's fallback model for calls that belong to no stage.
 
 ## Rate Limits & Concurrency
 
@@ -376,12 +393,15 @@ src/deep_research/
   ui.py                    Shared theme, console, glyphs, panels
   views.py                 Shared screens: banner, history, inspect, status, saved card
   repl.py                  Interactive REPL
+  interactive.py           Transient pickers, text prompt and viewer
+  onboarding.py            The setup screen (provider, keys, models)
+  userconfig.py            Saved choices (provider, model per stage)
   config.py                Settings from .env
   credentials.py           OS-keyring credential access
   setup_wizard.py          setup / login / logout / keys flows
   logging_config.py        Logging setup
   llm.py                   LLM client (sync + async, multi-provider)
-  capabilities.py          Per-model capability registry + recommended routes
+  capabilities.py          Per-model capability registry + recommended stage models
   usage.py                 Per-run call tracker + fallback metadata
   models.py                Pydantic data models
   urls.py                  Shared URL normalization for dedup

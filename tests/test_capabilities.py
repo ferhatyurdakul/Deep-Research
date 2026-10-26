@@ -194,7 +194,7 @@ class TestSettingsValidateRoutes:
             model_synthesize="deepseek-v4-pro",
         )
         info = s.validate_routes()
-        # Overrides win; the other stages are filled from the balanced profile.
+        # Overrides win; the other stages fall back to the recommended models.
         assert info["stages"]["decompose"] == "kimi-k2.6"
         assert info["stages"]["synthesize"] == "deepseek-v4-pro"
         assert info["stages"]["analyze"] == "glm-5.1"  # profile fill

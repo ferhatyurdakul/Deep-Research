@@ -8,6 +8,8 @@ from pathlib import Path
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel
 
+from . import userconfig
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -110,7 +112,8 @@ _PROVIDER_PROTOCOLS: dict[str, tuple[str, ...]] = {
 class Settings(BaseModel):
     # --- Provider selection ---
     # "zai" (default) | "opencode-go"
-    llm_provider: str = os.getenv("LLM_PROVIDER", "zai")
+    # Environment wins, then the provider chosen in setup, then Z.AI.
+    llm_provider: str = os.getenv("LLM_PROVIDER") or userconfig.provider() or "zai"
     # "" lets each provider pick its default. Override with "openai" or "anthropic".
     llm_endpoint_family: str = os.getenv("LLM_ENDPOINT_FAMILY", "")
 
@@ -165,10 +168,6 @@ class Settings(BaseModel):
     agent_budget_standard: int = _int_env("AGENT_BUDGET_STANDARD", 0)
     agent_budget_deep: int = _int_env("AGENT_BUDGET_DEEP", 0)
 
-    # Named stage-routing profile: "balanced" (default) | "budget" | "quality"
-    # See capabilities.RECOMMENDED_ROUTES for the per-provider catalog.
-    llm_route: str = os.getenv("LLM_ROUTE", "balanced")
-
     # Fallback provider when the primary trips a rate-limit / subscription cap.
     # Empty = no fallback (raise a clear error and abort the run).
     # Setting it to another configured provider (e.g. "zai" while primary is
@@ -176,8 +175,8 @@ class Settings(BaseModel):
     # process after a 429 is observed.
     llm_fallback_provider: str = os.getenv("LLM_FALLBACK_PROVIDER", "")
 
-    # Multi-model routing: override per pipeline stage. Empty = use the
-    # active profile's recommended model for that stage.
+    # Per-stage model overrides from the environment (MODEL_<STAGE>). Empty =
+    # use what was saved in setup / `/model`, else the recommended model.
     model_decompose: str = os.getenv("MODEL_DECOMPOSE", "")
     model_analyze: str = os.getenv("MODEL_ANALYZE", "")
     model_synthesize: str = os.getenv("MODEL_SYNTHESIZE", "")
@@ -313,7 +312,7 @@ class Settings(BaseModel):
             object.__setattr__(self, field, get_credential(key) or "")
 
     def stage_models(self) -> dict[str, str]:
-        """Return non-empty per-stage env overrides only (no profile fill-in)."""
+        """Return non-empty per-stage env overrides only (no saved or recommended fill-in)."""
         return {
             stage: model
             for stage, model in (
@@ -327,18 +326,31 @@ class Settings(BaseModel):
 
     def effective_stage_models(self) -> dict[str, str]:
         """
-        Resolve all four pipeline stages: per-stage env override wins, then
-        the active LLM_ROUTE profile fills the rest. Raises CapabilityViolation
-        if the profile is unknown for the active provider.
+        The model each pipeline stage will use. Per stage, in order of priority:
+        a MODEL_<STAGE> environment override, the model saved by setup or
+        `/model`, then the provider's recommended model. Raises
+        CapabilityViolation for an unknown provider.
         """
-        from .capabilities import resolve_stage_route
+        from .capabilities import PIPELINE_STAGES, recommended_stage_models
 
-        route = resolve_stage_route(self.active_provider, self.llm_route)
+        provider = self.active_provider
+        recommended = recommended_stage_models(provider).as_dict()
+        saved = userconfig.stage_models(provider)
+        override = self.stage_models()
         return {
-            "decompose": self.model_decompose or route.decompose,
-            "analyze": self.model_analyze or route.analyze,
-            "gap_analysis": self.model_gap_analysis or route.gap_analysis,
-            "synthesize": self.model_synthesize or route.synthesize,
+            stage: override.get(stage) or saved.get(stage) or recommended[stage]
+            for stage in PIPELINE_STAGES
+        }
+
+    def stage_sources(self) -> dict[str, str]:
+        """Where each stage's model comes from: "environment", "saved" or "recommended"."""
+        from .capabilities import PIPELINE_STAGES
+
+        saved = userconfig.stage_models(self.active_provider)
+        override = self.stage_models()
+        return {
+            stage: "environment" if stage in override else "saved" if stage in saved else "recommended"
+            for stage in PIPELINE_STAGES
         }
 
     def validate_routes(self) -> dict[str, object]:
@@ -381,8 +393,8 @@ class Settings(BaseModel):
             )
 
         validate_route(provider, self.active_model, family)
-        # Validate every stage that will actually run (profile + overrides),
-        # not just the explicit env overrides.
+        # Validate every stage that will actually run (environment, saved and
+        # recommended models alike), not just the explicit env overrides.
         stages = self.effective_stage_models()
         for stage_model in stages.values():
             # Stage models can route through their own family if it differs
@@ -396,7 +408,6 @@ class Settings(BaseModel):
             provider, self.active_model, family,
             extra_models=stages.values(),
         )
-        info["profile"] = self.llm_route
         info["stages"] = stages
         return info
 

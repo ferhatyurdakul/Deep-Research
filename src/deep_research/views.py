@@ -19,7 +19,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
-from . import __version__
+from . import __version__, userconfig
 from .config import settings
 from .models import ResearchReport
 from .options import academic_reason, stage_summary
@@ -59,10 +59,9 @@ def shape_from_namespace(ns: argparse.Namespace) -> str:
 def _model_line() -> Text:
     try:
         info = settings.validate_routes()
-        dot = glyph("dot")
         return Text(
-            f"{stage_summary(info.get('stages') or {}) if info.get('stages') else settings.active_model} "
-            f"via {settings.active_provider} ({info['endpoint_family']}) {dot} {settings.llm_route}"
+            f"{stage_summary(info.get('stages') or {})} "
+            f"via {settings.active_provider} ({info['endpoint_family']})"
         )
     except Exception:
         return Text(f"configuration invalid {glyph('dash')} run `{PROG} status`", style="err")
@@ -275,19 +274,25 @@ def print_status(shape: Optional[list] = None) -> None:
         info = settings.validate_routes()
         model_rows = [
             ("provider", Text(f"{settings.active_provider} ({info.get('endpoint_family', '?')})")),
-            ("profile", Text(settings.llm_route)),
-            ("model", Text(settings.active_model)),
             ("fallback", Text(settings.llm_fallback_provider or "(none)")),
         ]
     except (CapabilityViolation, ValueError) as e:
-        model_rows = [("route", Text(f"invalid: {e}", style="err"))]
-    console.print(panel(kv_grid(model_rows), title="Model"))
+        model_rows = [("provider", Text(f"invalid: {e}", style="err"))]
+    console.print(panel(kv_grid(model_rows), title="Provider"))
 
     if "stages" in info:
-        console.print(panel(
-            kv_grid([(k, Text(str(v))) for k, v in info["stages"].items()]),
-            title="Stage models",
-        ))
+        sources = {"environment": "from your environment", "saved": "saved", "recommended": "recommended"}
+        try:
+            origin = settings.stage_sources()
+        except Exception:
+            origin = {}
+        rows = []
+        for stage, model in info["stages"].items():
+            row = Text(str(model))
+            if origin.get(stage):
+                row.append(f"  {sources[origin[stage]]}", style="muted")
+            rows.append((stage, row))
+        console.print(panel(kv_grid(rows), title="Stage models"))
 
     def _key_state(is_set: bool) -> Text:
         return Text(f"{glyph('on')} set", style="ok") if is_set else Text(f"{glyph('off')} not set", style="muted")
@@ -307,10 +312,12 @@ def print_status(shape: Optional[list] = None) -> None:
         console.print(panel(kv_grid([(k, Text(str(v))) for k, v in shape]), title="This session"))
 
     console.print(panel(kv_grid([
+        ("saved choices", Text(short_path(userconfig.config_file()), overflow="fold")),
         ("sessions db", Text(short_path(DB_PATH), overflow="fold")),
         ("reports", Text(short_path(OUTPUTS_DIR), overflow="fold")),
     ]), title="Files"))
-    note(f"Change credentials with `{PROG} setup`. Environment variables and .env files override stored defaults.")
+    note(f"Change provider, keys or models with `{PROG} setup` (or /model). "
+         "Environment variables override what is saved.")
 
 
 # --- run completion -----------------------------------------------------

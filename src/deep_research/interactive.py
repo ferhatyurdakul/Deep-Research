@@ -201,3 +201,60 @@ def show_view(text: str, *, rows: Optional[int] = None, input=None, output=None)
     )
     app.ttimeoutlen = 0.05  # make a lone Esc register promptly
     app.run()
+
+
+def ask_text(
+    title: str, *, hint: str = "", secret: bool = False, initial: str = "",
+    esc: str = "cancel", input=None, output=None,
+) -> Optional[str]:
+    """One-line text prompt that erases itself when done.
+
+    Enter submits (an empty line returns ""); Esc or Ctrl-C cancels (None).
+    `esc` is only the word the footer uses for what Esc does ("cancel", "skip").
+    `secret=True` masks what is typed, for API keys. Pasting works.
+    """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, VSplit, Window
+    from prompt_toolkit.layout.controls import BufferControl
+    from prompt_toolkit.layout.processors import PasswordProcessor
+    from prompt_toolkit.styles import Style
+
+    buffer = Buffer(multiline=False)
+    if initial:
+        buffer.insert_text(initial)
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _submit(event):
+        event.app.exit(result=buffer.text)
+
+    @kb.add("escape", eager=True)
+    @kb.add("c-c")
+    def _cancel(event):
+        event.app.exit(result=None)
+
+    processors = [PasswordProcessor()] if secret else []
+    layout = Layout(HSplit([
+        Window(FormattedTextControl([("class:title", f" {title}")]), height=1),
+        VSplit([
+            Window(FormattedTextControl([("class:pointer", " ❯ ")]), width=3, height=1),
+            Window(BufferControl(buffer=buffer, input_processors=processors), height=1),
+        ]),
+        Window(FormattedTextControl(
+            [("class:hint", f" {hint + ' · ' if hint else ''}Enter to confirm · Esc to {esc}")]
+        ), height=1),
+    ]), focused_element=None)
+    app = Application(
+        layout=layout,
+        key_bindings=kb,
+        style=Style.from_dict({"title": "bold ansicyan", "pointer": "bold ansicyan", "hint": "ansibrightblack"}),
+        full_screen=False,
+        erase_when_done=True,
+        input=input,
+        output=output,
+    )
+    app.ttimeoutlen = 0.05
+    app.layout.focus(layout.container.children[1].children[1])
+    return app.run()

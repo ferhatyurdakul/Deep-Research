@@ -40,13 +40,60 @@ class _FakeKeyring:
     name = "FakeKeyring"
 
 
+_CRED_FIELDS = ("zai_api_key", "opencode_api_key", "tavily_api_key", "semantic_scholar_api_key")
+
+
+def _install_fake_keyring(monkeypatch):
+    """Point credentials at an in-memory keyring, and make sure the process-wide
+    settings are put back afterwards."""
+    from deep_research import credentials
+    from deep_research.config import settings
+
+    fake = _FakeKeyring()
+    monkeypatch.setattr(credentials, "_backend", lambda: fake)
+    # run_login()/run_logout() call the *global* settings.reload_credentials(),
+    # which copies this fake keyring's values (empty) into the process-wide
+    # settings singleton. Register the real values with monkeypatch so they are
+    # restored at teardown and later modules (test_e2e.py's live tests) still
+    # see the credentials they were collected with.
+    for field in _CRED_FIELDS:
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+    return fake
+
+
 @pytest.fixture
 def fake_keyring(monkeypatch):
-    fake = _FakeKeyring()
-    # Patch the lazy-imported backend in credentials.
-    from deep_research import credentials
-    monkeypatch.setattr(credentials, "_backend", lambda: fake)
-    return fake
+    return _install_fake_keyring(monkeypatch)
+
+
+def test_logout_does_not_leak_into_global_settings():
+    """Regression: run_logout() reloads the *global* settings from the (fake)
+    keyring, blanking every credential for the rest of the pytest process. The
+    live e2e tests, collected earlier with real keys, then ran with empty ones
+    and failed with "Missing credentials".
+
+    Uses its own MonkeyPatch and undoes it explicitly, so the check doesn't
+    depend on the order pytest tears fixtures down in."""
+    from deep_research.config import settings
+    from deep_research.setup_wizard import run_logout
+
+    originals = {f: getattr(settings, f) for f in _CRED_FIELDS}
+    for f in _CRED_FIELDS:
+        object.__setattr__(settings, f, f"sentinel-{f}")
+    mp = pytest.MonkeyPatch()
+    try:
+        _install_fake_keyring(mp)
+        with patch("deep_research.setup_wizard.Confirm.ask", return_value=True):
+            run_logout("all")
+        mp.undo()  # what the fake_keyring fixture's teardown does
+        after = {f: getattr(settings, f) for f in _CRED_FIELDS}
+    finally:
+        mp.undo()
+        for f, value in originals.items():
+            object.__setattr__(settings, f, value)
+    assert after == {f: f"sentinel-{f}" for f in _CRED_FIELDS}, (
+        "run_logout()/run_login() leaked the fake keyring into the global settings"
+    )
 
 
 class TestGetSetDelete:

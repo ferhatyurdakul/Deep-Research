@@ -86,7 +86,9 @@ COMMANDS: tuple = (
         details="Asks for confirmation on a terminal; scripts proceed without prompting.",
     ),
     CliCommand(
-        "setup", "Credential", "Store API keys in the OS keyring (wizard)",
+        "setup", "Credential", "Choose provider, API key and models",
+        details="Opens the setup screen: provider, API key (kept in the OS keyring), an optional "
+                "Tavily key, and a model for each pipeline stage. Needs a terminal; Esc skips it.",
     ),
     CliCommand(
         "login", "Credential", "Store a single API key", "[KEY]",
@@ -102,7 +104,7 @@ COMMANDS: tuple = (
         "keys", "Credential", "Show which keys are stored (never prints values)",
     ),
     CliCommand(
-        "status", "System", "Show model route, credentials, file paths",
+        "status", "System", "Show provider, stage models, credentials, paths",
     ),
     CliCommand(
         "migrate", "System", "Import a legacy research.db", "[PATH]",

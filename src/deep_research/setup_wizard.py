@@ -70,9 +70,14 @@ def run_setup_wizard(keys: Optional[Iterable[str]] = None) -> None:
     """
     Walk the user through entering credentials.
 
-    By default prompts for every managed key. Pass `keys` to limit the
-    wizard to a subset (e.g. ["ZAI_API_KEY"] from /login ZAI_API_KEY).
+    Pass `keys` to limit the wizard to a subset (e.g. ["ZAI_API_KEY"] from
+    /login ZAI_API_KEY). With no `keys` this is the full setup screen
+    (provider, keys, models), which lives in onboarding.
     """
+    if keys is None:
+        from .onboarding import run_setup
+        run_setup()
+        return
     console.print()
     console.print(panel(
         "Store API keys in your OS keyring (Keychain on macOS, Secret Service on Linux,\n"

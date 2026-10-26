@@ -10,7 +10,7 @@ from openai import (
     APITimeoutError, APIConnectionError, RateLimitError,
     BadRequestError as _OpenAIBadRequestError,
 )
-from tenacity import retry, stop_after_attempt, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, retry_if_exception
 
 from .capabilities import (
     describe_route,
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 _RETRYABLE: tuple[type[BaseException], ...] = (APITimeoutError, APIConnectionError, RateLimitError)
 
 _BAD_REQUEST_TYPES: tuple[type[BaseException], ...] = (_OpenAIBadRequestError,)
+
+# Z.AI answers "your plan does not include this model" with HTTP 429, which
+# looks like a rate limit but never clears by waiting — retrying only burns
+# over a minute of backoff before the same error comes back.
+_PLAN_LACKS_MODEL_CODES = ("1311",)
 
 try:
     from anthropic import (
@@ -112,6 +117,18 @@ if _ANTHROPIC_AVAILABLE:
 _MAX_ATTEMPTS = max(1, settings.llm_max_retries)
 
 
+def _plan_lacks_model(exc: BaseException) -> bool:
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        body = body["error"]
+    code = body.get("code") if isinstance(body, dict) else None
+    return code is not None and str(code) in _PLAN_LACKS_MODEL_CODES
+
+
+def _should_retry(exc: BaseException) -> bool:
+    return isinstance(exc, _RETRYABLE) and not _plan_lacks_model(exc)
+
+
 def _wait_strategy(retry_state) -> float:
     """Exponential backoff with equal-jitter; longer base for rate limits.
 
@@ -128,6 +145,13 @@ def _wait_strategy(retry_state) -> float:
     return capped / 2 + random.uniform(0, capped / 2)
 
 
+def _requested_model(retry_state) -> str:
+    """The model this call asked for (the stage's model), not the provider default."""
+    args = retry_state.args or ()
+    model = args[2] if len(args) > 2 else (retry_state.kwargs or {}).get("model")
+    return model or settings.active_model
+
+
 def _log_retry(retry_state) -> None:
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     is_rate_limited = isinstance(exc, _RATE_LIMIT_TYPES)
@@ -136,7 +160,7 @@ def _log_retry(retry_state) -> None:
         "rate-limited, backing off" if is_rate_limited else "transient error, retrying",
         settings.active_provider,
         settings.effective_endpoint_family,
-        settings.active_model,
+        _requested_model(retry_state),
         current_stage(),
         retry_state.attempt_number,
         _MAX_ATTEMPTS,
@@ -147,7 +171,7 @@ def _log_retry(retry_state) -> None:
 _RETRY_KWARGS = dict(
     stop=stop_after_attempt(_MAX_ATTEMPTS),
     wait=_wait_strategy,
-    retry=retry_if_exception_type(_RETRYABLE),
+    retry=retry_if_exception(_should_retry),
     before_sleep=_log_retry,
     # Re-raise the underlying provider exception (not tenacity's RetryError)
     # once attempts are exhausted, so the rate-limit/fallback handling in

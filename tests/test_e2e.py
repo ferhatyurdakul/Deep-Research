@@ -1091,6 +1091,41 @@ class TestDatabaseEnriched:
 # --- Synthesizer report splitting ---
 
 class TestReportSplit:
+    def test_split_skips_a_rule_after_the_metadata_line(self):
+        """Regression: glm-5.3 puts a '---' rule between the metadata line and
+        the first section. _split_report stopped stripping at the rule, found
+        text not starting with '## ', and returned an empty executive summary
+        with the whole report as 'detailed findings'."""
+        from deep_research.pipeline.synthesizer import _split_report
+
+        text = (
+            "# Research Report: X\n\n"
+            "**Date:** 2026-10-25 | **Sources analyzed:** 7\n\n"
+            "---\n\n"
+            "## Executive Summary\nS [1].\n\n---\n\n"
+            "## Key Findings\n- p [2]\n"
+        )
+        executive, detailed = _split_report(text)
+        assert executive.startswith("## Executive Summary") and "S [1]." in executive
+        assert detailed.startswith("## Key Findings")
+
+    def test_split_skips_any_horizontal_rule_style(self):
+        from deep_research.pipeline.synthesizer import _split_report
+
+        for rule in ("---", "-----", "***", "___"):
+            executive, detailed = _split_report(
+                f"# T\n\n{rule}\n\n## Summary\nbody\n\n## Findings\nmore\n"
+            )
+            assert executive.startswith("## Summary"), rule
+            assert detailed.startswith("## Findings"), rule
+
+    def test_split_does_not_eat_a_rule_that_is_not_leading(self):
+        from deep_research.pipeline.synthesizer import _split_report
+
+        executive, detailed = _split_report("## Summary\nbody\n\n---\n\n## Findings\nmore\n")
+        assert executive.startswith("## Summary") and "body" in executive
+        assert detailed.startswith("## Findings")
+
     def test_split_drops_title_and_metadata(self):
         from deep_research.pipeline.synthesizer import _split_report
         text = (

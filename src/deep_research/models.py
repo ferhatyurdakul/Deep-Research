@@ -98,9 +98,9 @@ class ResearchConfig(BaseModel):
         """
         Load model routing from settings.
 
-        Per-stage env vars (MODEL_DECOMPOSE etc.) win when set; the active
-        LLM_ROUTE profile fills the rest. Falls back to single-model routing
-        if the profile is unknown for the active provider — no hard fail
+        Per stage: a MODEL_<STAGE> env var wins, then the model saved by setup
+        or `/model`, then the provider's recommendation. Falls back to the
+        raw env values if the provider is unknown — no hard fail
         here, since validate_routes() runs separately at startup.
         """
         from .config import settings

@@ -109,24 +109,24 @@ class TestCommandRegistry:
 
 
 class TestProviderAndRouteCommands:
-    def test_route_change_through_dispatch(self):
-        # /route mutates settings.llm_route, validates, and rolls back on bad
-        # input. Use an opencode-go config so quality/budget/balanced are valid.
+    def test_route_command_is_gone(self):
+        from deep_research.repl import _COMMAND_INDEX
+
+        assert "/route" not in _COMMAND_INDEX
+        with pytest.raises(KeyError):
+            dispatch("/route quality", ReplState())
+
+    def test_provider_switch_is_saved(self):
+        from deep_research import userconfig
         from deep_research import config as cfg_module
         from deep_research.config import Settings as _Settings
-        custom = _Settings(
-            llm_provider="opencode-go", opencode_api_key="x",
-            opencode_model="glm-5.1", llm_route="balanced",
-        )
+        custom = _Settings(llm_provider="zai", zai_api_key="x", opencode_api_key="y", opencode_model="glm-5.1")
         with patch.object(cfg_module, "settings", custom), \
              patch.object(__import__("deep_research.repl", fromlist=["settings"]),
                           "settings", custom):
-            s = ReplState()
-            dispatch("/route quality", s)
-            assert custom.llm_route == "quality"
-            # Invalid profile should roll back
-            dispatch("/route nonexistent", s)
-            assert custom.llm_route == "quality"  # unchanged
+            dispatch("/provider opencode-go", ReplState())
+            assert custom.llm_provider == "opencode-go"
+            assert userconfig.provider() == "opencode-go"   # chosen in the app, so it sticks
 
     def test_provider_invalid_rolls_back(self):
         from deep_research import config as cfg_module
@@ -183,7 +183,7 @@ class TestStatusFragments:
 
         text = "".join(t for _, t in _status_fragments(ReplState()))
         assert text.startswith(" standard")
-        assert "zai/" in text or "invalid config" in text
+        assert "zai" in text or "invalid config" in text
         # Defaults are silent; thinking is gone entirely.
         assert "thinking" not in text
         assert "academic" not in text
@@ -675,7 +675,7 @@ class TestTransientCommands:
         from deep_research.repl import _COMMAND_INDEX
 
         for name in ("/depth", "/style", "/template", "/academic", "/agent", "/fresh",
-                     "/provider", "/route", "/model", "/delete"):
+                     "/provider", "/model", "/delete"):
             assert _COMMAND_INDEX[name].display == "silent", name
         for name in ("/help", "/status", "/history", "/inspect", "/fork", "/keys"):
             assert _COMMAND_INDEX[name].display == "view", name
@@ -737,69 +737,104 @@ class TestDeleteConfirmation:
 # --- /model ---------------------------------------------------------------
 
 class TestModelCommand:
+    """/model chooses the model for each stage and saves it."""
+
     @pytest.fixture
     def cfg(self, monkeypatch):
         import deep_research.repl as repl_mod
         from deep_research.config import Settings
 
         custom = Settings(
-            llm_provider="zai", zai_api_key="x", llm_route="balanced",
+            llm_provider="zai", zai_api_key="x",
             model_decompose="", model_analyze="", model_synthesize="", model_gap_analysis="",
         )
         monkeypatch.setattr(repl_mod, "settings", custom)
         return custom
 
-    def test_set_one_stage(self, cfg):
+    def test_set_one_stage_and_it_is_saved(self, cfg):
+        from deep_research import userconfig
+
         dispatch("/model analyze glm-5.1", ReplState())
-        assert cfg.model_analyze == "glm-5.1"
+        assert userconfig.stage_models("zai") == {"analyze": "glm-5.1"}
         assert cfg.effective_stage_models()["analyze"] == "glm-5.1"
-        assert cfg.effective_stage_models()["synthesize"] == "glm-5.3"  # profile still fills the rest
+        assert cfg.effective_stage_models()["synthesize"] == "glm-5.3"  # the rest stay recommended
+        assert cfg.stage_sources()["analyze"] == "saved"
 
     def test_set_every_stage(self, cfg):
-        dispatch("/model all glm-5", ReplState())
-        assert set(cfg.effective_stage_models().values()) == {"glm-5"}
+        dispatch("/model all glm-5.2", ReplState())
+        assert set(cfg.effective_stage_models().values()) == {"glm-5.2"}
 
-    def test_default_returns_a_stage_to_the_profile(self, cfg):
-        dispatch("/model analyze glm-5", ReplState())
+    def test_default_returns_a_stage_to_the_recommendation(self, cfg):
+        from deep_research import userconfig
+
+        dispatch("/model analyze glm-5.2", ReplState())
         dispatch("/model analyze default", ReplState())
-        assert cfg.model_analyze == ""
-        assert cfg.effective_stage_models()["analyze"] == "glm-5.3"
+        assert userconfig.stage_models("zai") == {}
+        assert cfg.effective_stage_models()["analyze"] == "glm-5.3-flash"
 
     def test_stage_names_accept_dashes(self, cfg):
-        dispatch("/model gap-analysis glm-5", ReplState())
-        assert cfg.model_gap_analysis == "glm-5"
+        dispatch("/model gap-analysis glm-5.2", ReplState())
+        assert cfg.effective_stage_models()["gap_analysis"] == "glm-5.2"
 
     def test_a_model_from_another_provider_is_rejected(self, cfg, capsys):
+        from deep_research import userconfig
+
         dispatch("/model synthesize kimi-k2.6", ReplState())
         out = capsys.readouterr().out
-        assert cfg.model_synthesize == ""
+        assert userconfig.stage_models("zai") == {}
         assert "opencode-go" in out and "not zai" in out
 
     def test_an_unregistered_model_is_allowed_with_a_warning(self, cfg, capsys):
         dispatch("/model analyze glm-9.9", ReplState())
-        assert cfg.model_analyze == "glm-9.9"
+        assert cfg.effective_stage_models()["analyze"] == "glm-9.9"
         assert "not in the capability registry" in capsys.readouterr().out
 
+    def test_a_legacy_registered_model_is_accepted_without_a_warning(self, cfg, capsys):
+        dispatch("/model decompose glm-4.5-air", ReplState())
+        assert cfg.effective_stage_models()["decompose"] == "glm-4.5-air"
+        assert "registry" not in capsys.readouterr().out
+
     def test_unknown_stage_and_missing_model_are_explained(self, cfg, capsys):
-        dispatch("/model nonsense glm-5", ReplState())
+        from deep_research import userconfig
+
+        dispatch("/model nonsense glm-5.2", ReplState())
         dispatch("/model analyze", ReplState())
         out = capsys.readouterr().out
         assert "Unknown stage" in out and "Usage: /model analyze" in out
-        assert cfg.model_analyze == ""
+        assert userconfig.stage_models("zai") == {}
 
-    def test_bare_command_lists_stage_models(self, cfg, capsys):
-        dispatch("/model analyze glm-5", ReplState())
+    def test_an_invalid_choice_rolls_back_to_what_was_saved(self, cfg, monkeypatch):
+        from deep_research import userconfig
+        from deep_research.capabilities import CapabilityViolation
+
+        dispatch("/model analyze glm-5.2", ReplState())
+
+        def boom(self):
+            raise CapabilityViolation("nope")
+
+        # pydantic models reject instance-level method patches; patch the class.
+        monkeypatch.setattr(type(cfg), "validate_routes", boom)
+        dispatch("/model analyze glm-5.1", ReplState())
+        assert userconfig.stage_models("zai") == {"analyze": "glm-5.2"}
+
+    def test_an_environment_override_is_called_out(self, cfg, monkeypatch, capsys):
+        monkeypatch.setenv("MODEL_ANALYZE", "glm-5.3")
+        dispatch("/model analyze glm-5.2", ReplState())
+        assert "MODEL_ANALYZE" in capsys.readouterr().out
+
+    def test_bare_command_lists_stage_models_and_where_they_come_from(self, cfg, capsys):
+        dispatch("/model analyze glm-5.2", ReplState())
         capsys.readouterr()
         dispatch("/model", ReplState())
         out = capsys.readouterr().out
         for stage in ("decompose", "analyze", "gap_analysis", "synthesize"):
             assert stage in out
-        assert "set by you" in out and "balanced profile" in out
+        assert "saved" in out and "recommended" in out
 
     def test_interactive_flow_picks_a_stage_then_a_model(self, cfg, monkeypatch):
         import deep_research.repl as repl_mod
 
-        titles, answers = [], iter(["analyze", "glm-5.1"])
+        titles, answers = [], iter(["analyze", "glm-5.2"])
 
         def fake(title, choices, current=None, **kw):
             titles.append((title, [v for v, _ in choices], current))
@@ -807,25 +842,46 @@ class TestModelCommand:
 
         monkeypatch.setattr(repl_mod, "pick_option", fake)
         line = repl_mod._pick_for_command("/model", ReplState())
-        assert line == "/model analyze glm-5.1"
+        assert line == "/model analyze glm-5.2"
         assert titles[0][1][0] == "all" and "analyze" in titles[0][1]
         assert titles[1][0] == "Model for analyze"
-        assert titles[1][1][0] == "glm-5.3" and titles[1][1][-1] == "default"
-        assert titles[1][2] == "glm-5.3"        # highlight starts on the stage's current model
+        assert titles[1][1][:2] == ["glm-5.3", "glm-5.3-flash"] and titles[1][1][-2:] == ["other", "default"]
+        assert titles[1][2] == "glm-5.3-flash"      # highlight starts on the stage's current model
+
+    def test_the_stage_picker_says_what_each_stage_does(self, cfg):
+        import deep_research.repl as repl_mod
+
+        rows = dict(repl_mod._model_stage_choices())
+        assert "reads each source" in rows["analyze"] and "glm-5.3-flash" in rows["analyze"]
+        assert "recommended" in rows["analyze"]
+
+    def test_other_lets_the_user_type_a_model_id(self, cfg, monkeypatch):
+        import deep_research.repl as repl_mod
+
+        monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: "other")
+        monkeypatch.setattr(repl_mod, "ask_text", lambda *a, **k: "  glm-9.9  ")
+        assert repl_mod._pick_for_command("/model analyze", ReplState()) == "/model analyze glm-9.9"
+
+    def test_cancelling_the_typed_id_cancels(self, cfg, monkeypatch):
+        import deep_research.repl as repl_mod
+
+        monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: "other")
+        monkeypatch.setattr(repl_mod, "ask_text", lambda *a, **k: None)
+        assert repl_mod._pick_for_command("/model analyze", ReplState()) is None
 
     def test_interactive_flow_with_the_stage_typed_asks_only_for_the_model(self, cfg, monkeypatch):
         import deep_research.repl as repl_mod
 
         calls = []
-        monkeypatch.setattr(repl_mod, "pick_option", lambda t, c, cur=None, **k: calls.append(t) or "glm-5")
-        assert repl_mod._pick_for_command("/model synthesize", ReplState()) == "/model synthesize glm-5"
+        monkeypatch.setattr(repl_mod, "pick_option", lambda t, c, cur=None, **k: calls.append(t) or "glm-5.2")
+        assert repl_mod._pick_for_command("/model synthesize", ReplState()) == "/model synthesize glm-5.2"
         assert calls == ["Model for synthesize"]
 
     @pytest.mark.parametrize("cancel_at", [0, 1])
     def test_cancelling_either_step_cancels(self, cfg, monkeypatch, cancel_at):
         import deep_research.repl as repl_mod
 
-        answers = iter(["analyze", "glm-5"])
+        answers = iter(["analyze", "glm-5.2"])
         step = {"n": 0}
 
         def fake(*a, **k):
@@ -839,7 +895,7 @@ class TestModelCommand:
         import deep_research.repl as repl_mod
 
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: (_ for _ in ()).throw(AssertionError("picker")))
-        assert repl_mod._pick_for_command("/model analyze glm-5", ReplState()) == "/model analyze glm-5"
+        assert repl_mod._pick_for_command("/model analyze glm-5.2", ReplState()) == "/model analyze glm-5.2"
 
     def test_completion_walks_stage_then_model(self, cfg):
         from prompt_toolkit.completion import CompleteEvent
@@ -851,6 +907,6 @@ class TestModelCommand:
 
         assert complete("/model ")[0] == "all" and "synthesize" in complete("/model ")
         models = complete("/model analyze ")
-        assert models[0] == "glm-5.3" and "glm-4.5-air" in models and models[-1] == "default"
-        assert complete("/model analyze glm-5.") == ["glm-5.3", "glm-5.1"]
+        assert models[:2] == ["glm-5.3", "glm-5.3-flash"] and models[-1] == "default" and "other" not in models
+        assert complete("/model analyze glm-5.3-f") == ["glm-5.3-flash", "glm-5.3-flashx"]
         assert complete("/model analyze glm-5.3 ") == []

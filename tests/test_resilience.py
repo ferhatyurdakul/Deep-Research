@@ -23,6 +23,14 @@ def _rate_limit_error(msg: str = "429 Too Many Requests") -> RateLimitError:
     return RateLimitError(msg, response=response, body=None)
 
 
+def _plan_lacks_model_error() -> RateLimitError:
+    """What Z.AI sends when the plan doesn't include a model: HTTP 429, code 1311."""
+    request = httpx.Request("POST", "https://api.z.ai/v1/chat/completions")
+    response = httpx.Response(429, request=request)
+    body = {"code": "1311", "message": "Your current subscription plan does not yet include access to GLM-5.3-FlashX"}
+    return RateLimitError("Error code: 429 - {'error': " + str(body) + "}", response=response, body=body)
+
+
 def _ok_response(content: str = "ok"):
     """Minimal stand-in for an OpenAI ChatCompletion response."""
     return SimpleNamespace(
@@ -143,6 +151,53 @@ class TestRetryAndFallback:
         out = await llm.achat("hello")
         assert out == "from-fallback"
         assert llm.settings.llm_provider == "opencode-go"
+
+
+class TestPlanLacksModel:
+    """A 429 that says the plan doesn't include the model never clears by waiting."""
+
+    def test_is_recognised_from_the_error_body(self):
+        import deep_research.llm as llm
+        assert llm._plan_lacks_model(_plan_lacks_model_error())
+        # the SDK may hand over the whole {"error": {...}} envelope
+        envelope = _plan_lacks_model_error()
+        envelope.body = {"error": envelope.body}
+        assert llm._plan_lacks_model(envelope)
+        assert not llm._plan_lacks_model(_rate_limit_error())
+        assert not llm._plan_lacks_model(TimeoutError("slow"))
+
+    def test_is_not_retried_but_real_rate_limits_are(self):
+        import deep_research.llm as llm
+        assert llm._should_retry(_rate_limit_error())
+        assert not llm._should_retry(_plan_lacks_model_error())
+
+    @pytest.mark.asyncio
+    async def test_fails_after_one_call_instead_of_burning_the_retry_budget(self, fast_retries, monkeypatch):
+        llm = fast_retries
+
+        def behavior(n, kwargs):
+            raise _plan_lacks_model_error()
+
+        comp = _FakeCompletions(behavior)
+        monkeypatch.setattr(llm, "get_async_client", lambda: _FakeClient(comp))
+        monkeypatch.setattr(llm.settings, "llm_fallback_provider", "")
+
+        with pytest.raises(llm.ProviderLimitExceeded) as caught:
+            await llm.achat("hello", model="glm-5.3-flashx")
+        assert comp.calls == 1
+        assert "does not yet include access" in str(caught.value)
+
+
+class TestRetryLogNamesTheRequestedModel:
+    def test_uses_the_model_argument_not_the_provider_default(self, monkeypatch):
+        import deep_research.llm as llm
+        monkeypatch.setattr(llm.settings, "glm_model", "glm-5.3")
+        positional = SimpleNamespace(args=("prompt", "system", "glm-5.3-flash", 0.2, False), kwargs={})
+        by_keyword = SimpleNamespace(args=("prompt", "system"), kwargs={"model": "glm-5.2"})
+        unset = SimpleNamespace(args=("prompt", "system", None, 0.2, False), kwargs={})
+        assert llm._requested_model(positional) == "glm-5.3-flash"
+        assert llm._requested_model(by_keyword) == "glm-5.2"
+        assert llm._requested_model(unset) == llm.settings.active_model
 
 
 # --- bounded search concurrency -------------------------------------------
