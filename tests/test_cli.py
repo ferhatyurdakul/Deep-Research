@@ -162,7 +162,7 @@ class TestHelpOutput:
 
 class TestPapersFlags:
     """--papers / --no-papers: on, off, or (neither) left to the template and depth.
-    --academic / --no-academic are the old names: accepted, no longer listed."""
+    The old --academic / --no-academic are gone, so "academic" only means the report style."""
 
     def _args(self, *argv):
         return main_mod.build_run_parser().parse_args([*argv, "q"])
@@ -174,29 +174,24 @@ class TestPapersFlags:
         assert self._args("--papers").academic is True
         assert self._args("--no-papers").academic is False
 
-    def test_the_old_flag_names_still_work(self):
-        assert self._args("--academic").academic is True
-        assert self._args("--no-academic").academic is False
+    @pytest.mark.parametrize("flag", ["--academic", "--no-academic"])
+    def test_the_old_flag_names_are_rejected(self, monkeypatch, capsys, flag):
+        code, _, err = _run([flag, "q"], monkeypatch, capsys)
+        assert code == 2 and "unrecognized" in err
 
-    @pytest.mark.parametrize("flags", [
-        ["--papers", "--no-papers"],
-        ["--academic", "--no-academic"],
-        ["--papers", "--no-academic"],       # old and new names conflict too
-    ])
-    def test_opposite_flags_together_are_a_usage_error(self, monkeypatch, capsys, flags):
-        code, _, err = _run([*flags, "q"], monkeypatch, capsys)
+    def test_opposite_flags_together_are_a_usage_error(self, monkeypatch, capsys):
+        code, _, err = _run(["--papers", "--no-papers", "q"], monkeypatch, capsys)
         assert code == 2 and "not allowed with" in err
 
-    def test_help_lists_the_new_names_and_not_the_old(self, monkeypatch, capsys):
+    def test_help_lists_both_flags_and_no_old_names(self, monkeypatch, capsys):
         _, out, _ = _run(["--help"], monkeypatch, capsys)
         assert "--papers" in out and "--no-papers" in out
-        assert "--academic" not in out and "--no-academic" not in out
-        assert "SUPPRESS" not in out
+        assert "--academic" not in out
 
     def test_continue_accepts_both_flags(self, monkeypatch, capsys):
         _, out, _ = _run(["continue", "--help"], monkeypatch, capsys)
         assert "--papers" in out and "--no-papers" in out
-        assert "--academic" not in out and "SUPPRESS" not in out
+        assert "--academic" not in out
 
     @pytest.mark.parametrize("argv,template,expected", [
         ([], None, False),
@@ -204,7 +199,6 @@ class TestPapersFlags:
         (["--depth", "deep", "--no-papers"], None, False),       # ...and off wins
         (["--papers"], None, True),
         (["--no-papers"], "science", False),                     # off beats the template
-        (["--no-academic"], "science", False),                   # the old name, likewise
         ([], "science", True),                                   # auto follows it
     ])
     def test_run_config_after_the_template_is_applied(self, argv, template, expected):

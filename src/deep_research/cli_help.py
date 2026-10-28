@@ -232,7 +232,7 @@ def _is_meta(action: argparse.Action) -> bool:
 def _option_table(parser: argparse.ArgumentParser, *, with_choices: bool, meta: str = "exclude") -> Table:
     """Rows for the parser's options. `meta` controls -h/--version: "exclude"
     (research options only), "only" (just those), or "include" (all, meta last)."""
-    actions = [a for a in parser._actions if a.option_strings and a.help is not argparse.SUPPRESS]
+    actions = [a for a in parser._actions if a.option_strings]
     regular = [a for a in actions if not _is_meta(a)]
     special = [a for a in actions if _is_meta(a)]
     chosen = {"exclude": regular, "only": special, "include": regular + special}[meta]

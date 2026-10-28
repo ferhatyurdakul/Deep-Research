@@ -77,8 +77,8 @@ def add_shape_args(parser: argparse.ArgumentParser, *, agent: bool = False) -> N
     )
     # Research papers (arXiv + Semantic Scholar) are auto — the template and
     # depth decide — unless one of these says otherwise: args.academic is None,
-    # True or False. (Named "papers" for users so it can't be mistaken for
-    # --style academic; --academic / --no-academic stay as unlisted aliases.)
+    # True or False. (Called "papers", not "academic", so it can't be mistaken
+    # for --style academic.)
     papers = parser.add_mutually_exclusive_group()
     papers.add_argument(
         "--papers", dest="academic", action="store_const", const=True, default=None,
@@ -88,8 +88,6 @@ def add_shape_args(parser: argparse.ArgumentParser, *, agent: bool = False) -> N
         "--no-papers", dest="academic", action="store_const", const=False,
         help="Web search only, even for --depth deep or the science / literature templates",
     )
-    papers.add_argument("--academic", dest="academic", action="store_const", const=True, help=argparse.SUPPRESS)
-    papers.add_argument("--no-academic", dest="academic", action="store_const", const=False, help=argparse.SUPPRESS)
     if agent:
         parser.add_argument(
             "--agent", action="store_true",

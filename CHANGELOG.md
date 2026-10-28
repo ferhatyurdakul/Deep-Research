@@ -9,11 +9,11 @@
 - **`/model` now saves** instead of lasting only for the session (that was the only way to keep a choice before; now it is the way to make one). It also gains an `other` entry to type any model ID, and `default` means "back to the recommendation".
 - **`/provider` saves the provider** too, so the app opens on the one you last chose (`LLM_PROVIDER` in the environment still wins).
 
-### Changed — research papers are `auto`, `on` or `off` (was the `academic` switch)
+### Breaking — research papers are `auto`, `on` or `off` (was the `academic` switch)
 
 - **`/academic` is now `/papers`, and no longer an on/off toggle.** Searching research papers (arXiv + Semantic Scholar) was switched on by any of three things — the switch, the science / literature templates, and `deep` depth — and the switch could only add to that, so "off" could still mean "on". It is now a three-way setting: **`auto`** (the default) follows the template and depth, **`on`** always searches papers, **`off`** never does, even on `deep` or `science`. Bare `/papers` opens a picker whose `auto` row says what it amounts to right now (`now on (science template)`); `/papers on|off|auto` sets it directly; `/status` shows `auto — on (science template)`; the status line and banner tag is `papers`.
 - **Why the rename:** the switch was called `academic`, and so is a report style (`--style academic`, `/style academic`) — `--no-academic --style academic` read as a contradiction when the two have nothing to do with each other (one is where sources come from, the other how the report reads). The style keeps its name, because it is stored with saved sessions.
-- **`--papers` / `--no-papers`** replace `--academic`, and add the missing way to turn it off. Giving opposite flags together is a usage error. Both work on `continue` and `resynthesize` too. `--academic`, `--no-academic` and `/academic` still work as unlisted aliases, so existing scripts and habits keep running; with no flag nothing changes: a run behaves as it did.
+- **`--papers` / `--no-papers`** replace `--academic`, and add the missing way to turn it off. Giving both is a usage error. Both work on `continue` and `resynthesize` too. **The old names `--academic`, `--no-academic` and `/academic` are removed, not aliased** — an alias would keep the clashing word alive. Scripts that pass `--academic` need `--papers` (or just drop it on `--depth deep`, which includes papers on `auto`); with no flag a run behaves as it did.
 
 ### Added — setup screen
 

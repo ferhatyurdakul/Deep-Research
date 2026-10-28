@@ -376,8 +376,6 @@ class TestCompleter:
     def test_papers_completes_its_three_modes(self):
         assert [c.text for c in self._complete("/papers ")] == ["auto", "on", "off"]
         assert [c.text for c in self._complete("/papers o")] == ["on", "off"]
-        # the old name is an alias and completes the same way
-        assert [c.text for c in self._complete("/academic ")] == ["auto", "on", "off"]
 
     def test_only_the_first_argument_completes(self):
         assert self._complete("/depth deep ") == []
@@ -456,13 +454,14 @@ class TestPapersAreShownWhenImplied:
     def test_default_is_auto(self):
         assert ReplState().academic is None
 
-    def test_the_old_name_is_an_alias_for_the_same_command(self):
+    def test_the_old_name_is_gone(self, capsys):
         from deep_research.repl import _COMMAND_INDEX
 
-        assert _COMMAND_INDEX["/academic"] is _COMMAND_INDEX["/papers"]
+        assert "/academic" not in _COMMAND_INDEX
         s = ReplState()
-        dispatch("/academic on", s)
-        assert s.academic is True
+        with pytest.raises(KeyError):
+            dispatch("/academic on", s)
+        assert s.academic is None
 
     def test_an_unknown_mode_changes_nothing_and_lists_the_valid_ones(self, capsys):
         s = ReplState(academic=True)
@@ -618,7 +617,6 @@ class TestPicker:
     @pytest.mark.parametrize("line", [
         "/depth deep",          # already has a value
         "/papers on",           # already has a value
-        "/academic on",         # the old name, likewise
         "/history",             # takes no choice
         "/continue 3",
         "just a question",
@@ -783,7 +781,7 @@ class TestTransientCommands:
     def test_display_modes_by_command(self):
         from deep_research.repl import _COMMAND_INDEX
 
-        for name in ("/depth", "/style", "/template", "/papers", "/academic", "/agent", "/fresh",
+        for name in ("/depth", "/style", "/template", "/papers", "/agent", "/fresh",
                      "/provider", "/model", "/delete"):
             assert _COMMAND_INDEX[name].display == "silent", name
         for name in ("/help", "/status", "/history", "/inspect", "/fork", "/keys"):

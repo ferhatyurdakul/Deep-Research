@@ -636,7 +636,7 @@ COMMANDS: tuple = (
             current=lambda s: s.template or "none",
             details="Domain-specific prompts and search strategy.", display="silent"),
     Command("/papers", _cmd_papers, "Search research papers: auto, on or off (arXiv + Semantic Scholar)",
-            "[auto|on|off]", aliases=("/academic",), group="Research", choices=academic_choices,
+            "[auto|on|off]", group="Research", choices=academic_choices,
             current=lambda s: academic_mode_name(s.academic), interactive=_papers_interactive,
             details="auto lets the template and depth decide (deep and the science / literature "
                     "templates search papers); on always does; off never does. Not the report "

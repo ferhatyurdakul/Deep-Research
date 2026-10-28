@@ -1,12 +1,12 @@
 # Deep Research
 
-AI research agent that iteratively searches, analyzes, and synthesizes comprehensive reports with evidence-backed citations from web and academic sources.
+AI research agent that iteratively searches, analyzes, and synthesizes comprehensive reports with evidence-backed citations from web sources and research papers.
 
 Built on [Z.AI](https://z.ai) GLM and [OpenCode Go](https://opencode.ai/go) models. Fully async. CLI tool.
 
 ## What It Does
 
-Give it a question. It breaks it into sub-questions, searches the web and academic databases in parallel, reads and analyzes each source, identifies what's missing, searches again, and produces a structured report with inline citations traced back to specific sources.
+Give it a question. It breaks it into sub-questions, searches the web and paper databases (arXiv, Semantic Scholar) in parallel, reads and analyzes each source, identifies what's missing, searches again, and produces a structured report with inline citations traced back to specific sources.
 
 ```
 deep-research "What are the latest advances in LLM reasoning?"
@@ -189,7 +189,7 @@ Help is generated from the same command registry and parsers the CLI runs on, so
 
 ## Search Sources
 
-Up to four providers searched in parallel, deduplicated automatically. Web providers always run; the paper providers (arXiv, Semantic Scholar) follow the **papers** setting. It is `auto` by default — on for `--depth deep` and the science / literature templates, off otherwise — and `--papers` / `--no-papers` (`/papers on|off|auto` in the REPL) force it either way. (Not to be confused with `--style academic`, which is only about how the report reads. `--academic` / `--no-academic` and `/academic` were this setting's old names and still work.):
+Up to four providers searched in parallel, deduplicated automatically. Web providers always run; the paper providers (arXiv, Semantic Scholar) follow the **papers** setting. It is `auto` by default — on for `--depth deep` and the science / literature templates, off otherwise — and `--papers` / `--no-papers` (`/papers on|off|auto` in the REPL) force it either way. (Not to be confused with `--style academic`, which is only about how the report reads.):
 
 | Provider         | Type     | Key Required | Notes                           |
 |-----------------|----------|:------------:|---------------------------------|
@@ -267,7 +267,7 @@ Seeing your options:
 | `/depth [quick\|standard\|deep]` | Show or set research depth |
 | `/style [brief\|standard\|academic]` | Show or set report style |
 | `/template [technology\|science\|market\|literature\|none]` | Set domain template |
-| `/papers [auto\|on\|off]` | Research papers (arXiv + Semantic Scholar): `auto` follows the template and depth, `on` always, `off` never. `/academic` is an alias |
+| `/papers [auto\|on\|off]` | Research papers (arXiv + Semantic Scholar): `auto` follows the template and depth, `on` always, `off` never |
 | `/agent` | Toggle autonomous agent loop |
 | `/fresh` | Toggle fresh mode (revisit URLs from past sessions) |
 | `/provider [zai\|opencode-go]` | Show or switch LLM provider |
