@@ -117,7 +117,7 @@ class TestHelpOutput:
         assert code == 0
         for cmd in COMMANDS:
             assert cmd.name in out, cmd.name
-        for flag in ("--depth", "--style", "--template", "--academic", "--agent", "--fresh",
+        for flag in ("--depth", "--style", "--template", "--papers", "--agent", "--fresh",
                      "--help", "--version"):
             assert flag in out, flag
         assert "Examples" in out
@@ -156,8 +156,70 @@ class TestHelpOutput:
 
     def test_shape_flags_appear_on_continue_but_agent_does_not(self, monkeypatch, capsys):
         _, out, _ = _run(["continue", "--help"], monkeypatch, capsys)
-        assert "--depth" in out and "--academic" in out
+        assert "--depth" in out and "--papers" in out
         assert "--agent" not in out  # /continue ignores agent mode
+
+
+class TestPapersFlags:
+    """--papers / --no-papers: on, off, or (neither) left to the template and depth.
+    --academic / --no-academic are the old names: accepted, no longer listed."""
+
+    def _args(self, *argv):
+        return main_mod.build_run_parser().parse_args([*argv, "q"])
+
+    def test_default_is_auto(self):
+        assert self._args().academic is None
+
+    def test_flags_set_on_and_off(self):
+        assert self._args("--papers").academic is True
+        assert self._args("--no-papers").academic is False
+
+    def test_the_old_flag_names_still_work(self):
+        assert self._args("--academic").academic is True
+        assert self._args("--no-academic").academic is False
+
+    @pytest.mark.parametrize("flags", [
+        ["--papers", "--no-papers"],
+        ["--academic", "--no-academic"],
+        ["--papers", "--no-academic"],       # old and new names conflict too
+    ])
+    def test_opposite_flags_together_are_a_usage_error(self, monkeypatch, capsys, flags):
+        code, _, err = _run([*flags, "q"], monkeypatch, capsys)
+        assert code == 2 and "not allowed with" in err
+
+    def test_help_lists_the_new_names_and_not_the_old(self, monkeypatch, capsys):
+        _, out, _ = _run(["--help"], monkeypatch, capsys)
+        assert "--papers" in out and "--no-papers" in out
+        assert "--academic" not in out and "--no-academic" not in out
+        assert "SUPPRESS" not in out
+
+    def test_continue_accepts_both_flags(self, monkeypatch, capsys):
+        _, out, _ = _run(["continue", "--help"], monkeypatch, capsys)
+        assert "--papers" in out and "--no-papers" in out
+        assert "--academic" not in out and "SUPPRESS" not in out
+
+    @pytest.mark.parametrize("argv,template,expected", [
+        ([], None, False),
+        (["--depth", "deep"], None, True),                       # the preset asks
+        (["--depth", "deep", "--no-papers"], None, False),       # ...and off wins
+        (["--papers"], None, True),
+        (["--no-papers"], "science", False),                     # off beats the template
+        (["--no-academic"], "science", False),                   # the old name, likewise
+        ([], "science", True),                                   # auto follows it
+    ])
+    def test_run_config_after_the_template_is_applied(self, argv, template, expected):
+        from deep_research.pipeline.templates import get_template
+
+        args = self._args(*argv, *(["--template", template] if template else []))
+        config = main_mod.build_config(args)
+        tmpl = get_template(config.template) if config.template else None
+        config.apply_academic_source(bool(tmpl and tmpl.use_academic))
+        assert config.use_academic_search is expected
+
+    def test_banner_shape_follows_the_flags(self):
+        assert "papers" not in views.shape_from_namespace(self._args("--depth", "deep", "--no-papers"))
+        assert "papers" in views.shape_from_namespace(self._args("--papers"))
+        assert "papers" in views.shape_from_namespace(self._args("--depth", "deep"))
 
 
 class TestParserErrors:
@@ -235,13 +297,13 @@ class TestViews:
     def test_shape_summary_only_lists_enabled_toggles(self):
         assert views.shape_summary("standard", "standard") == "standard depth · standard style"
         text = views.shape_summary("deep", "brief", "science", academic=True, agent=True)
-        assert "science template" in text and "academic" in text and "agent" in text
+        assert "science template" in text and "papers" in text and "agent" in text
         assert "fresh" not in text
 
-    def test_shape_summary_shows_academic_when_the_template_or_depth_implies_it(self):
-        assert "academic" in views.shape_summary("standard", "standard", "science")
-        assert "academic" in views.shape_summary("deep", "standard")
-        assert "academic" not in views.shape_summary("standard", "standard", "market")
+    def test_shape_summary_shows_papers_when_the_template_or_depth_implies_it(self):
+        assert "papers" in views.shape_summary("standard", "standard", "science")
+        assert "papers" in views.shape_summary("deep", "standard")
+        assert "papers" not in views.shape_summary("standard", "standard", "market")
 
     def test_present_report_saves_and_prints_card(self, isolated_store, capsys):
         from deep_research.storage.db import load_report

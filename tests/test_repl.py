@@ -52,7 +52,6 @@ class TestStateMutations:
     @pytest.mark.parametrize(
         "cmd,attr,initial",
         [
-            ("/academic", "academic", False),
             ("/agent", "agent", False),
             ("/fresh", "fresh", False),
         ],
@@ -186,7 +185,7 @@ class TestStatusFragments:
         assert "zai" in text or "invalid config" in text
         # Defaults are silent; thinking is gone entirely.
         assert "thinking" not in text
-        assert "academic" not in text
+        assert "papers" not in text
 
         state = ReplState(depth=ResearchDepth.DEEP, template="science", agent=True)
         text = "".join(t for _, t in _status_fragments(state))
@@ -372,7 +371,13 @@ class TestCompleter:
         assert [c.text for c in self._complete("/template sc")] == ["science"]
 
     def test_commands_without_values_complete_nothing_after_the_name(self):
-        assert self._complete("/academic ") == []
+        assert self._complete("/agent ") == []
+
+    def test_papers_completes_its_three_modes(self):
+        assert [c.text for c in self._complete("/papers ")] == ["auto", "on", "off"]
+        assert [c.text for c in self._complete("/papers o")] == ["on", "off"]
+        # the old name is an alias and completes the same way
+        assert [c.text for c in self._complete("/academic ")] == ["auto", "on", "off"]
 
     def test_only_the_first_argument_completes(self):
         assert self._complete("/depth deep ") == []
@@ -398,30 +403,30 @@ class TestRunReplRobustness:
         assert "Did you mean /history" in out and "Goodbye" in out
 
 
-class TestAcademicIsShownWhenImplied:
-    """Science/literature templates and deep depth switch academic search on
+class TestPapersAreShownWhenImplied:
+    """Science/literature templates and deep depth switch paper search on
     inside the pipeline; the status bar must say so rather than only
-    reflecting the explicit /academic switch."""
+    reflecting the explicit /papers setting."""
 
     def _bar(self, state):
         from deep_research.repl import _status_fragments
         return "".join(t for _, t in _status_fragments(state))
 
     @pytest.mark.parametrize("template", ["science", "literature"])
-    def test_academic_templates_show_the_tag(self, template):
-        assert "academic" in self._bar(ReplState(template=template))
+    def test_paper_templates_show_the_tag(self, template):
+        assert "papers" in self._bar(ReplState(template=template))
 
     @pytest.mark.parametrize("template", ["technology", "market", None])
     def test_other_templates_do_not(self, template):
-        assert "academic" not in self._bar(ReplState(template=template))
+        assert "papers" not in self._bar(ReplState(template=template))
 
     def test_deep_depth_shows_the_tag(self):
-        assert "academic" in self._bar(ReplState(depth=ResearchDepth.DEEP))
-        assert "academic" not in self._bar(ReplState(depth=ResearchDepth.QUICK))
+        assert "papers" in self._bar(ReplState(depth=ResearchDepth.DEEP))
+        assert "papers" not in self._bar(ReplState(depth=ResearchDepth.QUICK))
 
     def test_banner_shape_line_follows_the_same_rule(self):
-        assert "academic" in ReplState(template="science").shape()
-        assert "academic" not in ReplState(template="market").shape()
+        assert "papers" in ReplState(template="science").shape()
+        assert "papers" not in ReplState(template="market").shape()
 
     def test_status_names_the_reason(self, capsys):
         dispatch("/template science", ReplState())  # no-op on a throwaway state
@@ -429,12 +434,75 @@ class TestAcademicIsShownWhenImplied:
         dispatch("/status", s)
         assert "science template" in capsys.readouterr().out
 
-    def test_switching_the_toggle_off_explains_it_is_still_on(self, capsys):
-        s = ReplState(template="science", academic=True)
-        dispatch("/academic", s)
+    def test_off_overrides_what_the_template_and_depth_imply(self):
+        s = ReplState(template="science", depth=ResearchDepth.DEEP)
+        assert s.academic_reason() is not None            # auto: on
+        dispatch("/papers off", s)
+        assert s.academic is False and s.academic_reason() is None
+        assert "papers" not in self._bar(s) and "papers" not in s.shape()
+
+    def test_on_forces_it_even_where_nothing_implies_it(self):
+        s = ReplState(template="market")
+        assert s.academic_reason() is None
+        dispatch("/papers on", s)
+        assert s.academic is True and s.academic_reason() == "on"
+        assert "papers" in self._bar(s) and "papers" in s.shape()
+
+    def test_auto_hands_the_decision_back(self):
+        s = ReplState(template="science", academic=False)
+        dispatch("/papers auto", s)
+        assert s.academic is None and s.academic_reason() == "science template"
+
+    def test_default_is_auto(self):
+        assert ReplState().academic is None
+
+    def test_the_old_name_is_an_alias_for_the_same_command(self):
+        from deep_research.repl import _COMMAND_INDEX
+
+        assert _COMMAND_INDEX["/academic"] is _COMMAND_INDEX["/papers"]
+        s = ReplState()
+        dispatch("/academic on", s)
+        assert s.academic is True
+
+    def test_an_unknown_mode_changes_nothing_and_lists_the_valid_ones(self, capsys):
+        s = ReplState(academic=True)
+        dispatch("/papers maybe", s)
         out = capsys.readouterr().out
-        assert s.academic is False
-        assert "still searches" in out and "science template" in out
+        assert s.academic is True
+        assert "Unknown papers mode" in out and "auto, on, off" in out
+
+    def test_bare_command_lists_the_modes_and_what_auto_means_now(self, capsys):
+        dispatch("/papers", ReplState(template="science"))
+        out = capsys.readouterr().out
+        assert "auto" in out and "on (science template)" in out
+
+    @pytest.mark.parametrize("state,label", [
+        (ReplState(), "auto — off"),
+        (ReplState(template="science"), "auto — on (science template)"),
+        (ReplState(depth=ResearchDepth.DEEP), "auto — on (deep depth)"),
+        (ReplState(academic=True), "on"),
+        (ReplState(template="science", academic=False), "off"),
+    ])
+    def test_status_label(self, state, label):
+        assert state.academic_label() == label
+
+    @pytest.mark.parametrize("academic,template,depth,expected", [
+        (None, None, ResearchDepth.STANDARD, False),
+        (None, "science", ResearchDepth.STANDARD, True),
+        (None, None, ResearchDepth.DEEP, True),
+        (True, "market", ResearchDepth.QUICK, True),
+        (False, "science", ResearchDepth.DEEP, False),
+        (False, "literature", ResearchDepth.STANDARD, False),
+    ])
+    def test_the_run_config_follows_the_mode(self, academic, template, depth, expected):
+        """What the pipeline will search, after the template is applied the way
+        the orchestrator applies it."""
+        from deep_research.pipeline.templates import get_template
+
+        config = ReplState(academic=academic, template=template, depth=depth).to_config()
+        tmpl = get_template(template) if template else None
+        config.apply_academic_source(bool(tmpl and tmpl.use_academic))
+        assert config.use_academic_search is expected
 
     def test_reason_matches_what_the_pipeline_decides(self):
         """Guard against drift: the display rule is derived from the same
@@ -444,10 +512,10 @@ class TestAcademicIsShownWhenImplied:
         from deep_research.pipeline.templates import TEMPLATES
 
         for key, tmpl in TEMPLATES.items():
-            assert (academic_reason("standard", key, False) is not None) == tmpl.use_academic, key
+            assert (academic_reason("standard", key, None) is not None) == tmpl.use_academic, key
         for depth in ResearchDepth:
             expected = ResearchConfig.from_depth(depth).use_academic_search
-            assert (academic_reason(depth.value, None, False) is not None) == expected, depth
+            assert (academic_reason(depth.value, None, None) is not None) == expected, depth
 
 
 class TestPicker:
@@ -503,6 +571,32 @@ class TestPicker:
         assert out == "/depth deep"
         assert seen == {"title": "Depth", "values": ["quick", "standard", "deep"], "current": "quick"}
 
+    def test_papers_picker_says_what_auto_means_right_now(self, monkeypatch):
+        import deep_research.repl as repl_mod
+
+        seen = {}
+
+        def fake_pick(title, choices, current=None, **kw):
+            seen.update(values=[v for v, _ in choices], blurbs=dict(choices), current=current)
+            return "off"
+
+        monkeypatch.setattr(repl_mod, "pick_option", fake_pick)
+        out = repl_mod._pick_for_command("/papers", ReplState(template="science"))
+        assert out == "/papers off"
+        assert seen["values"] == ["auto", "on", "off"] and seen["current"] == "auto"
+        assert "now on (science template)" in seen["blurbs"]["auto"]
+
+    def test_papers_picker_marks_the_current_mode(self, monkeypatch):
+        import deep_research.repl as repl_mod
+
+        seen = {}
+        monkeypatch.setattr(
+            repl_mod, "pick_option",
+            lambda title, choices, current=None, **kw: seen.update(current=current) or None,
+        )
+        assert repl_mod._pick_for_command("/papers", ReplState(academic=False)) is None
+        assert seen["current"] == "off"
+
     def test_template_picker_offers_none_and_marks_it_when_unset(self, monkeypatch):
         import deep_research.repl as repl_mod
 
@@ -523,7 +617,8 @@ class TestPicker:
 
     @pytest.mark.parametrize("line", [
         "/depth deep",          # already has a value
-        "/academic",            # a toggle: no options to pick from
+        "/papers on",           # already has a value
+        "/academic on",         # the old name, likewise
         "/history",             # takes no choice
         "/continue 3",
         "just a question",
@@ -639,13 +734,13 @@ class TestTransientCommands:
         assert len(viewer) == 1 and "Unknown depth" in viewer[0]
         assert capsys.readouterr().out == ""         # not leaked to the scrollback
 
-    def test_a_warning_on_a_successful_toggle_is_shown(self, viewer):
+    def test_setting_papers_is_silent_even_when_it_overrides_the_template(self, viewer, capsys):
         from deep_research.repl import _run_transient
 
-        s = ReplState(template="science", academic=True)
-        _run_transient("/academic", s)
+        s = ReplState(template="science")
+        _run_transient("/papers off", s)
         assert s.academic is False
-        assert len(viewer) == 1 and "still searches" in viewer[0]
+        assert viewer == [] and capsys.readouterr().out == ""
 
     def test_read_only_screens_always_go_to_the_viewer(self, viewer, capsys):
         from deep_research.repl import _run_transient
@@ -688,7 +783,7 @@ class TestTransientCommands:
     def test_display_modes_by_command(self):
         from deep_research.repl import _COMMAND_INDEX
 
-        for name in ("/depth", "/style", "/template", "/academic", "/agent", "/fresh",
+        for name in ("/depth", "/style", "/template", "/papers", "/academic", "/agent", "/fresh",
                      "/provider", "/model", "/delete"):
             assert _COMMAND_INDEX[name].display == "silent", name
         for name in ("/help", "/status", "/history", "/inspect", "/fork", "/keys"):

@@ -330,3 +330,46 @@ async def test_continue_research_honors_template(monkeypatch):
 
     assert synth_kwargs.get("template_guidance") == "GUIDE"
     assert synth_kwargs.get("system_prompt") == "SYS"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("academic,template,depth,searches_papers", [
+    (None, None, ResearchDepth.STANDARD, False),
+    (None, "science", ResearchDepth.STANDARD, True),
+    (None, None, ResearchDepth.DEEP, True),
+    (True, None, ResearchDepth.QUICK, True),
+    (False, "science", ResearchDepth.DEEP, False),
+])
+async def test_academic_mode_decides_which_sources_are_searched(
+    monkeypatch, academic, template, depth, searches_papers,
+):
+    """auto follows the template and depth; on/off are final. The aggregator
+    sees `sources=None` (everything, papers included) or web-only."""
+    orch = _wire_pipeline(monkeypatch)
+    requested = []
+
+    class _Spy(_FakeAggregator):
+        async def search(self, queries, sources=None, **kwargs):
+            requested.append(sources)
+            return await super().search(queries, sources=sources, **kwargs)
+
+    monkeypatch.setattr(orch, "SearchAggregator", _Spy)
+
+    import deep_research.pipeline.synthesizer as synth
+
+    async def _fake_synth(*args, **kwargs):
+        return ("## Executive Summary", "## Findings", [])
+
+    monkeypatch.setattr(synth, "asynthesize_report", _fake_synth)
+
+    config = ResearchConfig.from_depth(depth)
+    config.academic = academic
+    config.template = template
+    config.fresh = True
+    await orch.arun_research("topic", config)
+
+    assert requested, "nothing was searched"
+    for sources in requested:
+        assert (sources is None) is searches_papers
+        if not searches_papers:
+            assert "arxiv" not in sources and "scholar" not in sources

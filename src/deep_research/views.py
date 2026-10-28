@@ -35,24 +35,24 @@ PROG = "deep-research"
 
 def shape_summary(
     depth: str, style: str, template: Optional[str] = None,
-    academic: bool = False, agent: bool = False, fresh: bool = False,
+    academic: Optional[bool] = None, agent: bool = False, fresh: bool = False,
 ) -> str:
-    """`standard depth · standard style · science template · academic`: always
-    depth and style; the optional parts only when on. `academic` shows when a
-    run will search academic sources — whether switched on directly or implied
-    by the template or depth (science, literature, deep)."""
+    """`standard depth · standard style · science template · papers`: always
+    depth and style; the optional parts only when on. `papers` shows when a
+    run will search research papers — whether set on directly or implied by
+    the template or depth (science, literature, deep) while papers is auto."""
     parts = [f"{depth} depth", f"{style} style"]
     if template:
         parts.append(f"{template} template")
     academic = academic_reason(depth, template, academic) is not None
-    parts += [label for label, on in (("academic", academic), ("agent", agent), ("fresh", fresh)) if on]
+    parts += [label for label, on in (("papers", academic), ("agent", agent), ("fresh", fresh)) if on]
     return f" {glyph('dot')} ".join(parts)
 
 
 def shape_from_namespace(ns: argparse.Namespace) -> str:
     return shape_summary(
         ns.depth, getattr(ns, "style", "standard"), getattr(ns, "template", None),
-        getattr(ns, "academic", False), getattr(ns, "agent", False), getattr(ns, "fresh", False),
+        getattr(ns, "academic", None), getattr(ns, "agent", False), getattr(ns, "fresh", False),
     )
 
 

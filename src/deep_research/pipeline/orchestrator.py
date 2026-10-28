@@ -168,9 +168,8 @@ async def arun_research(query: str, config: ResearchConfig | None = None) -> Res
     aggregator = _build_aggregator(config)
 
     tmpl = get_template(config.template) if config.template else None
+    config.apply_academic_source(bool(tmpl and tmpl.use_academic))
     if tmpl:
-        if tmpl.use_academic:
-            config.use_academic_search = True
         if tmpl.use_extraction:
             config.use_extraction = True
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")
@@ -306,12 +305,11 @@ async def acontinue_research(
     set_llm_concurrency(config.max_llm_concurrency)
     aggregator = _build_aggregator(config)
 
-    # Same template handling as arun_research: templates toggle academic
+    # Same template handling as arun_research: templates set academic
     # search/extraction and steer synthesis prompts.
     tmpl = get_template(config.template) if config.template else None
+    config.apply_academic_source(bool(tmpl and tmpl.use_academic))
     if tmpl:
-        if tmpl.use_academic:
-            config.use_academic_search = True
         if tmpl.use_extraction:
             config.use_extraction = True
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")

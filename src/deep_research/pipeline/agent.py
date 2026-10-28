@@ -223,9 +223,8 @@ async def arun_agent_research(query: str, config: ResearchConfig | None = None) 
     aggregator = _build_aggregator(config)
 
     tmpl = get_template(config.template) if config.template else None
+    config.apply_academic_source(bool(tmpl and tmpl.use_academic))
     if tmpl:
-        if tmpl.use_academic:
-            config.use_academic_search = True
         if tmpl.use_extraction:
             config.use_extraction = True
         console.print(f"  [dim]Using template: {tmpl.name}[/dim]")

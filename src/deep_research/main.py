@@ -75,10 +75,21 @@ def add_shape_args(parser: argparse.ArgumentParser, *, agent: bool = False) -> N
         "--template", choices=TEMPLATE_VALUES,
         help="Domain-specific prompts and search strategy",
     )
-    parser.add_argument(
-        "--academic", action="store_true",
-        help="Also search arXiv and Semantic Scholar",
+    # Research papers (arXiv + Semantic Scholar) are auto — the template and
+    # depth decide — unless one of these says otherwise: args.academic is None,
+    # True or False. (Named "papers" for users so it can't be mistaken for
+    # --style academic; --academic / --no-academic stay as unlisted aliases.)
+    papers = parser.add_mutually_exclusive_group()
+    papers.add_argument(
+        "--papers", dest="academic", action="store_const", const=True, default=None,
+        help="Always also search research papers (arXiv, Semantic Scholar); default: the template and depth decide",
     )
+    papers.add_argument(
+        "--no-papers", dest="academic", action="store_const", const=False,
+        help="Web search only, even for --depth deep or the science / literature templates",
+    )
+    papers.add_argument("--academic", dest="academic", action="store_const", const=True, help=argparse.SUPPRESS)
+    papers.add_argument("--no-academic", dest="academic", action="store_const", const=False, help=argparse.SUPPRESS)
     if agent:
         parser.add_argument(
             "--agent", action="store_true",
@@ -131,8 +142,8 @@ def build_command_parser(name: str) -> CliParser:
 def build_config(args: argparse.Namespace) -> ResearchConfig:
     config = ResearchConfig.from_depth(ResearchDepth(args.depth))
     config.report_style = ReportStyle(args.style)
-    if args.academic:
-        config.use_academic_search = True
+    config.academic = args.academic
+    config.apply_academic_source()
     if args.template:
         config.template = args.template
     if args.fresh:

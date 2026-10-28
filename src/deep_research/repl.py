@@ -42,7 +42,8 @@ from .interactive import ask_text, pick_option, show_view
 from .models import ReportStyle, ResearchConfig, ResearchDepth
 from .onboarding import needs_setup, run_setup
 from .options import (
-    STAGE_BLURBS, academic_reason, depth_choices, model_choices, style_choices, template_choices,
+    ACADEMIC_MODES, STAGE_BLURBS, academic_choices, academic_mode_name, academic_mode_value,
+    academic_reason, depth_choices, model_choices, style_choices, template_choices,
 )
 from .setup_wizard import (
     run_login,
@@ -65,15 +66,15 @@ class ReplState:
     depth: ResearchDepth = ResearchDepth.STANDARD
     style: ReportStyle = ReportStyle.STANDARD
     template: Optional[str] = None
-    academic: bool = False
+    academic: Optional[bool] = None  # None = auto: the template and depth decide
     agent: bool = False
     fresh: bool = False
 
     def to_config(self) -> ResearchConfig:
         config = ResearchConfig.from_depth(self.depth)
         config.report_style = self.style
-        if self.academic:
-            config.use_academic_search = True
+        config.academic = self.academic
+        config.apply_academic_source()
         if self.template:
             config.template = self.template
         if self.fresh:
@@ -82,8 +83,15 @@ class ReplState:
         return config
 
     def academic_reason(self) -> Optional[str]:
-        """Why academic sources will be searched (None if they won't be)."""
+        """Why research papers will be searched (None if they won't be)."""
         return academic_reason(self.depth.value, self.template, self.academic)
+
+    def academic_label(self) -> str:
+        """`/status` wording: `on`, `off`, or `auto — on (science template)`."""
+        if self.academic is not None:
+            return academic_mode_name(self.academic)
+        reason = self.academic_reason()
+        return f"auto — on ({reason})" if reason else "auto — off"
 
     def shape(self) -> str:
         return views.shape_summary(
@@ -209,16 +217,28 @@ def _toggle(state: ReplState, attr: str, label: str, meaning: str) -> None:
     ok(f"{label}: [bold]{'on' if on else 'off'}[/bold]" + (f"  [muted]{meaning}[/muted]" if on else ""))
 
 
-def _cmd_academic(state: ReplState, args: list) -> None:
-    state.academic = not state.academic
-    reason = state.academic_reason()
-    if state.academic:
-        ok("Academic sources: [bold]on[/bold]  [muted]arXiv and Semantic Scholar are searched too[/muted]")
-    elif reason:
-        # The switch is off but the template/depth still pulls them in.
-        warn(f"Switch is off, but the {reason} still searches academic sources.")
-    else:
-        ok("Academic sources: [bold]off[/bold]")
+def _cmd_papers(state: ReplState, args: list) -> None:
+    choices = academic_choices(state.depth.value, state.template)
+    if not args:
+        _print_choices("Papers", academic_mode_name(state.academic), choices, "/papers")
+        return
+    value = args[0].lower()
+    if value not in ACADEMIC_MODES:
+        fail(f"Unknown papers mode {escape(repr(args[0]))}.", hint=f"Valid: {', '.join(ACADEMIC_MODES)}")
+        return
+    state.academic = academic_mode_value(value)
+    blurb = dict(academic_choices(state.depth.value, state.template))[value]
+    ok(f"Papers: [bold]{value}[/bold]  [muted]{escape(blurb)}[/muted]")
+
+
+def _papers_interactive(state: ReplState, args: list, line: str) -> Optional[str]:
+    """Bare `/papers` -> a picker whose `auto` row says what it means right
+    now. A typed value passes through."""
+    if args:
+        return line
+    choices = academic_choices(state.depth.value, state.template)
+    value = pick_option("Papers", choices, academic_mode_name(state.academic))
+    return None if value is None else f"/papers {value}"
 
 
 def _cmd_agent(state: ReplState, args: list) -> None:
@@ -263,7 +283,7 @@ def _cmd_status(state: ReplState, args: list) -> None:
         ("depth", state.depth.value),
         ("style", state.style.value),
         ("template", state.template or "(none)"),
-        ("academic", f"on ({state.academic_reason()})" if state.academic_reason() else "off"),
+        ("papers", state.academic_label()),
         ("agent mode", "on" if state.agent else "off"),
         ("fresh mode", "on" if state.fresh else "off"),
     ])
@@ -615,9 +635,12 @@ COMMANDS: tuple = (
             group="Research", choices=_template_choices_with_none,
             current=lambda s: s.template or "none",
             details="Domain-specific prompts and search strategy.", display="silent"),
-    Command("/academic", _cmd_academic, "Toggle academic sources (arXiv + Semantic Scholar)",
-            group="Research",
-            details="Deep depth and the science/literature templates switch this on by themselves.", display="silent"),
+    Command("/papers", _cmd_papers, "Search research papers: auto, on or off (arXiv + Semantic Scholar)",
+            "[auto|on|off]", aliases=("/academic",), group="Research", choices=academic_choices,
+            current=lambda s: academic_mode_name(s.academic), interactive=_papers_interactive,
+            details="auto lets the template and depth decide (deep and the science / literature "
+                    "templates search papers); on always does; off never does. Not the report "
+                    "style: /style academic is about how the report reads.", display="silent"),
     Command("/agent", _cmd_agent, "Toggle the autonomous agent loop",
             group="Research",
             details="After each pass the agent decides whether to search more, go deeper, broaden, "
@@ -842,7 +865,7 @@ def _status_fragments(state: "ReplState") -> list:
     if state.style != ReportStyle.STANDARD:
         frags += [("class:sep", " · "), ("class:style", state.style.value)]
     for label, on in (
-        ("academic", state.academic_reason() is not None),
+        ("papers", state.academic_reason() is not None),
         ("agent", state.agent), ("fresh", state.fresh),
     ):
         if on:

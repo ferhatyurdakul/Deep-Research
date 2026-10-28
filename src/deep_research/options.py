@@ -33,12 +33,26 @@ def depth_choices() -> list[Choice]:
     for depth in ResearchDepth:
         cfg = ResearchConfig.from_depth(depth)
         passes = f"{cfg.max_iterations} pass" + ("" if cfg.max_iterations == 1 else "es")
-        extra = ", academic sources" if cfg.use_academic_search else ""
+        extra = ", research papers" if cfg.use_academic_search else ""
         out.append((
             depth.value,
             f"{_DEPTH_LEAD[depth]}: {cfg.max_sub_questions} sub-questions, {passes}{extra}",
         ))
     return out
+
+
+def academic_choices(depth: Optional[str] = None, template: Optional[str] = None) -> list[Choice]:
+    """The three modes of the papers setting. With `depth` (and `template`), `auto` also says
+    what it amounts to right now — the part that is otherwise invisible."""
+    auto = "Follow the template and depth"
+    if depth is not None:
+        reason = academic_reason(depth, template, None)
+        auto += f" — now {'on (' + reason + ')' if reason else 'off'}"
+    return [
+        ("auto", auto),
+        ("on", "Always search research papers too (arXiv, Semantic Scholar)"),
+        ("off", "Web search only, even on deep depth or the science template"),
+    ]
 
 
 def style_choices() -> list[Choice]:
@@ -49,16 +63,27 @@ def template_choices() -> list[Choice]:
     return [(key, t.description) for key, t in TEMPLATES.items()]
 
 
-def academic_reason(depth: str, template: Optional[str], explicit: bool) -> Optional[str]:
+ACADEMIC_MODES = ("auto", "on", "off")
+
+
+def academic_mode_name(mode: Optional[bool]) -> str:
+    return "auto" if mode is None else ("on" if mode else "off")
+
+
+def academic_mode_value(name: str) -> Optional[bool]:
+    return {"auto": None, "on": True, "off": False}[name]
+
+
+def academic_reason(depth: str, template: Optional[str], mode: Optional[bool] = None) -> Optional[str]:
     """Why arXiv + Semantic Scholar will be searched, or None when they won't be.
 
-    Mirrors what the pipeline does: the --academic / /academic switch, a
-    template that needs academic sources (science, literature), or the deep
-    depth preset all turn academic search on. Status displays use this so they
-    show what a run will actually do, not just the explicit switch.
+    `mode` is the user's say: True (on) and False (off) are final; None (auto)
+    leaves it to what the pipeline does by itself — a template that needs
+    academic sources (science, literature) or the deep depth preset. Status
+    displays use this so they show what a run will actually do.
     """
-    if explicit:
-        return "on"
+    if mode is not None:
+        return "on" if mode else None
     tmpl = TEMPLATES.get(template) if template else None
     if tmpl is not None and tmpl.use_academic:
         return f"{template} template"

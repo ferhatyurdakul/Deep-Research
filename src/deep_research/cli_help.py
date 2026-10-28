@@ -59,7 +59,7 @@ COMMANDS: tuple = (
                 "saves the result as a new session linked to the original.",
         examples=(
             (f"{PROG} continue 3", ""),
-            (f"{PROG} continue 3 --depth deep --academic", "go deeper, add academic sources"),
+            (f"{PROG} continue 3 --depth deep --no-papers", "go deeper, web sources only"),
         ),
     ),
     CliCommand(
@@ -119,7 +119,7 @@ INDEX = {c.name: c for c in COMMANDS}
 TOP_EXAMPLES: tuple = (
     (PROG, "open the interactive prompt"),
     (f'{PROG} "How do solid-state batteries work?"', "one query, then exit"),
-    (f'{PROG} --depth deep --academic "CRISPR off-target effects"', ""),
+    (f'{PROG} --papers "CRISPR off-target effects"', "always include research papers"),
     (f'{PROG} --template market --style brief "EV charging market"', ""),
     (f"{PROG} history", "past sessions"),
     (f"{PROG} continue 3 --depth deep", "dig further into session 3"),
@@ -232,7 +232,7 @@ def _is_meta(action: argparse.Action) -> bool:
 def _option_table(parser: argparse.ArgumentParser, *, with_choices: bool, meta: str = "exclude") -> Table:
     """Rows for the parser's options. `meta` controls -h/--version: "exclude"
     (research options only), "only" (just those), or "include" (all, meta last)."""
-    actions = [a for a in parser._actions if a.option_strings]
+    actions = [a for a in parser._actions if a.option_strings and a.help is not argparse.SUPPRESS]
     regular = [a for a in actions if not _is_meta(a)]
     special = [a for a in actions if _is_meta(a)]
     chosen = {"exclude": regular, "only": special, "include": regular + special}[meta]
@@ -273,7 +273,7 @@ def print_main_help(parser: argparse.ArgumentParser) -> None:
         (f"{glyph('mark')} Deep Research", "brand"), (f"  v{__version__}", "muted"),
     ))
     console.print(
-        "Breaks a question into sub-questions, searches the web and academic sources,\n"
+        "Breaks a question into sub-questions, searches the web and research papers,\n"
         "reads and analyzes what it finds, and writes a cited report."
     )
 

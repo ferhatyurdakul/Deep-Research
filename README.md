@@ -129,7 +129,7 @@ deep-research "your research question"
 # Depth presets
 deep-research --depth quick "topic"             # 1 pass, fast
 deep-research --depth standard "topic"          # 2 passes, balanced (default)
-deep-research --depth deep "topic"              # 3 passes, thorough, academic sources
+deep-research --depth deep "topic"              # 3 passes, thorough, research papers
 
 # Report style
 deep-research --style brief "topic"             # ~500-1000 words, summary + key findings
@@ -138,7 +138,8 @@ deep-research --style academic "topic"          # ~3000-5000 words, numbered sec
 
 # Pipeline features
 deep-research --agent "topic"                   # autonomous agent mode (decides when to stop)
-deep-research --academic "topic"                # include arXiv + Semantic Scholar
+deep-research --papers "topic"                  # always include arXiv + Semantic Scholar
+deep-research --depth deep --no-papers "topic"  # web only, even on deep
 deep-research --template science "topic"        # domain-specific strategy
 deep-research --fresh "topic"                   # ignore URLs already analyzed in past sessions
 
@@ -161,7 +162,7 @@ deep-research delete 5                          # remove a session (confirms on 
 
 Credential subcommands: `deep-research setup`, `login [KEY]`, `logout [KEY|all]`, `keys`.
 System subcommands: `deep-research status` (provider, the model for each stage and where it comes from, credentials, file paths), `migrate [PATH]`, `help [COMMAND]`.
-`continue` and `resynthesize` accept the same shape flags as one-shot runs (`--depth`, `--academic`, `--template`, `--style`, `--fresh`).
+`continue` and `resynthesize` accept the same shape flags as one-shot runs (`--depth`, `--papers`, `--template`, `--style`, `--fresh`).
 
 ### Getting help
 
@@ -182,25 +183,26 @@ Help is generated from the same command registry and parsers the CLI runs on, so
 | `--style`                | `brief` \| `standard` \| `academic`           | `standard` | Shape and length of the final report                     |
 | `--template`             | `technology` \| `science` \| `market` \| `literature` | —    | Domain-specific prompts and defaults                     |
 | `--agent`                | —                                             | off        | Autonomous decision loop instead of fixed iterations     |
-| `--academic`             | —                                             | off        | Adds arXiv + Semantic Scholar                            |
+| `--papers`               | —                                             | auto       | Always adds research papers (arXiv + Semantic Scholar)   |
+| `--no-papers`            | —                                             | auto       | Web only, even for `deep` or the science / literature templates |
 | `--fresh`                | —                                             | off        | Disables cross-session URL deduplication                 |
 
 ## Search Sources
 
-Up to four providers searched in parallel, deduplicated automatically. Web providers always run; the academic providers (arXiv, Semantic Scholar) are opt-in — enabled with `--academic`, `--depth deep`, or the science/literature templates:
+Up to four providers searched in parallel, deduplicated automatically. Web providers always run; the paper providers (arXiv, Semantic Scholar) follow the **papers** setting. It is `auto` by default — on for `--depth deep` and the science / literature templates, off otherwise — and `--papers` / `--no-papers` (`/papers on|off|auto` in the REPL) force it either way. (Not to be confused with `--style academic`, which is only about how the report reads. `--academic` / `--no-academic` and `/academic` were this setting's old names and still work.):
 
 | Provider         | Type     | Key Required | Notes                           |
 |-----------------|----------|:------------:|---------------------------------|
 | Tavily          | Web      | Optional     | High quality, needs API key     |
 | DuckDuckGo      | Web      | No           | Free fallback, always available |
-| arXiv           | Academic | No           | Full metadata, always available |
-| Semantic Scholar | Academic | No           | API key optional for rate limits|
+| arXiv           | Papers   | No           | Full metadata, always available |
+| Semantic Scholar | Papers   | No           | API key optional for rate limits|
 
-When no Tavily key is set, DuckDuckGo is the primary web search. Academic providers join with `--academic` / `--depth deep` / the science or literature template.
+When no Tavily key is set, DuckDuckGo is the primary web search. The paper providers join when the papers setting is on, or on `auto` with `--depth deep` or the science / literature template.
 
 ## Depth Presets
 
-| Depth      | Sub-questions | Results/query | Pages scraped | Iterations | Academic | Extraction |
+| Depth      | Sub-questions | Results/query | Pages scraped | Iterations | Papers   | Extraction |
 |------------|:------------:|:-------------:|:-------------:|:----------:|:--------:|:----------:|
 | `quick`    | 3            | 3             | 2             | 1          |          |            |
 | `standard` | 5            | 5             | 3             | 2          |          |            |
@@ -215,9 +217,9 @@ Pages beyond the scrape budget fall back to search-snippet sources instead of be
 | Template     | Best for                               | What it enables       |
 |--------------|----------------------------------------|-----------------------|
 | `technology` | Software, AI, infrastructure           | data extraction       |
-| `science`    | Biology, physics, chemistry, medicine  | academic + extraction |
+| `science`    | Biology, physics, chemistry, medicine  | papers + extraction   |
 | `market`     | Industries, competitors, market sizing | data extraction       |
-| `literature` | Systematic literature review           | academic search       |
+| `literature` | Systematic literature review           | paper search          |
 
 Each template provides domain-tuned prompts for decomposition, analysis, and synthesis.
 
@@ -250,14 +252,14 @@ Run `deep-research` with no arguments to drop into the REPL:
 > /quit
 ```
 
-Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`academic`, `agent`, `fresh`), provider — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
+Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`papers`, `agent`, `fresh`), provider — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
 
 Seeing your options:
 
 - `/help` lists every command grouped by purpose (Research, Model, Sessions, Credentials, General), with the allowed values under each setting; `/help depth` explains one command.
-- A setting command with options is a picker: type `/depth` and press Enter, and an arrow-key list opens (`quick`, `standard`, `deep`, each with what it does, the current one marked). ↑/↓ (or j/k) move, Enter selects, 1-9 jump straight to an item, Esc cancels. The same works for `/style`, `/template` and `/provider`; `/model` opens a stage picker, then a model picker. Typing the value yourself (`/depth deep`) skips the picker, and setting a value echoes its meaning.
+- A setting command with options is a picker: type `/depth` and press Enter, and an arrow-key list opens (`quick`, `standard`, `deep`, each with what it does, the current one marked). ↑/↓ (or j/k) move, Enter selects, 1-9 jump straight to an item, Esc cancels. The same works for `/style`, `/template`, `/papers` and `/provider`; `/model` opens a stage picker, then a model picker. Typing the value yourself (`/depth deep`) skips the picker, and setting a value echoes its meaning.
 - **Nothing is left behind.** Choosing or changing a setting prints no confirmation — the status line above the input box already shows the new state, and the picker disappears when you choose. Screens you read (`/help`, `/status`, `/history`, `/inspect`, `/keys`, `/fork`) open in a viewer that vanishes when you press Enter, Esc or `q` (↑/↓ scroll when it's taller than the screen); if a setting command hits a problem (a bad value, an invalid model) that message appears in the same kind of viewer. `/delete <id>` asks with a Yes/No picker. Commands whose output is the point — runs (`/continue`, `/resynthesize`, your questions) and the credential wizards — print normally.
-- The status line and banner show academic sources whenever a run will use them — switched on with `/academic`, or implied by the `science` / `literature` templates or `deep` depth — and `/status` says which. Only a submitted research question leaves its input box in the scrollback; settings changes don't stack up boxes.
+- The status line and banner show `papers` whenever a run will search research papers — set on with `/papers on`, or implied on `auto` by the `science` / `literature` templates or `deep` depth — and `/status` says which (`auto — on (science template)`). `/papers off` keeps a run web-only whatever the template or depth. Only a submitted research question leaves its input box in the scrollback; settings changes don't stack up boxes.
 - A mistyped command suggests the closest match (`/histroy` → `/history`).
 
 | Command | Description |
@@ -265,7 +267,7 @@ Seeing your options:
 | `/depth [quick\|standard\|deep]` | Show or set research depth |
 | `/style [brief\|standard\|academic]` | Show or set report style |
 | `/template [technology\|science\|market\|literature\|none]` | Set domain template |
-| `/academic` | Toggle academic sources (arXiv + Semantic Scholar) |
+| `/papers [auto\|on\|off]` | Research papers (arXiv + Semantic Scholar): `auto` follows the template and depth, `on` always, `off` never. `/academic` is an alias |
 | `/agent` | Toggle autonomous agent loop |
 | `/fresh` | Toggle fresh mode (revisit URLs from past sessions) |
 | `/provider [zai\|opencode-go]` | Show or switch LLM provider |

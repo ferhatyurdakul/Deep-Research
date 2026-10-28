@@ -48,6 +48,10 @@ class ResearchConfig(BaseModel):
     # is gated off per-model by capabilities.resolve_thinking.
     use_thinking: bool = True
     use_academic_search: bool = False
+    # The user's say on research papers (shown to users as "papers"):
+    # True/False force arXiv + Semantic Scholar on/off, None (auto) leaves it
+    # to the depth preset and the template.
+    academic: Optional[bool] = None
     use_extraction: bool = False
     template: Optional[str] = None  # template key from templates.py
     fresh: bool = False
@@ -73,6 +77,14 @@ class ResearchConfig(BaseModel):
         config = cls(depth=depth, **presets[depth])
         config.apply_limits()
         return config
+
+    def apply_academic_source(self, template_wants: bool = False) -> None:
+        """Settle use_academic_search: a forced on/off wins; on auto, academic
+        sources are searched when the depth preset or the template asks."""
+        if self.academic is not None:
+            self.use_academic_search = self.academic
+        elif template_wants:
+            self.use_academic_search = True
 
     def apply_limits(self) -> None:
         """Overlay env-configured concurrency ceilings and shape overrides.
