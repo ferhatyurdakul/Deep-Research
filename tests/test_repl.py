@@ -592,6 +592,20 @@ class TestBoxCommit:
         text, erased = self._prompt_with("\r")
         assert text == "" and erased is True
 
+    def test_esc_closes_the_command_menu_and_clears_the_slash(self):
+        # "/dep" opens the menu; Esc backs out of it completely, so what is
+        # typed next is a fresh line, not "/dep..." with a stale menu.
+        text, erased = self._prompt_with("/dep\x1bhello\r")
+        assert text == "hello" and erased is False
+
+    def test_esc_closes_a_value_menu_too(self):
+        text, erased = self._prompt_with("/depth \x1bhello\r")
+        assert text == "hello" and erased is False
+
+    def test_enter_on_a_bare_slash_is_not_an_unknown_command(self):
+        text, erased = self._prompt_with("/\r")
+        assert text == "" and erased is True
+
 
 # --- transient output: nothing left behind after a / command ----------------
 

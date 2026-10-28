@@ -910,13 +910,22 @@ class _BoxedPrompt:
             # "/depth"; anything ambiguous or with arguments is untouched.
             # (complete_state is async and may be gone by Enter, so don't
             # rely on it.)
-            if text.startswith("/") and " " not in text.strip() and text not in _COMMAND_INDEX:
+            if text.strip() == "/":
+                text = ""  # a bare "/" is a closed menu, not a command
+            elif text.startswith("/") and " " not in text.strip() and text not in _COMMAND_INDEX:
                 matches = [k for k in _COMMAND_INDEX if k.startswith(text)]
                 if len(matches) == 1:
                     text = matches[0]
             # Only a research question keeps its box in the scrollback.
             event.app.erase_when_done = not _commits_box(text)
             event.app.exit(result=text)
+
+        @kb.add("escape", filter=Condition(lambda: self._buffer.text.startswith("/")), eager=True)
+        def _dismiss_menu(event):
+            # Esc closes the command menu and the "/" with it, like backing
+            # out of the pickers. Eager only while a slash line is open, so
+            # Alt-key editing shortcuts are untouched the rest of the time.
+            event.app.current_buffer.reset()
 
         @kb.add("c-c")
         def _cancel(event):
@@ -1050,6 +1059,7 @@ class _BoxedPrompt:
             input=input,
             output=output,
         )
+        self._app.ttimeoutlen = 0.05  # make a lone Esc register promptly
 
     def prompt(self) -> str:
         self._app.erase_when_done = False  # the key bindings decide per submit
