@@ -107,6 +107,20 @@ COMMANDS: tuple = (
         "status", "System", "Show provider, stage models, credentials, paths",
     ),
     CliCommand(
+        "skills", "System", "Install the agent skill (Claude Code, Codex, ...)", "[install|uninstall|list]",
+        details="Lets your other coding agents run this tool for you: installs a small skill folder "
+                "into each agent's skills directory. Only the folder named synapse-deep-research is "
+                "ever written or removed. With no action it lists the agents it knows and whether "
+                "the skill is installed for each.",
+        examples=(
+            (f"{PROG} skills", "which agents are set up"),
+            (f"{PROG} skills install", "into every agent found in your home folder"),
+            (f"{PROG} skills install --agent claude --project", "only for the project you are in"),
+            (f"{PROG} skills install --dry-run", "show what would be written"),
+            (f"{PROG} skills uninstall", ""),
+        ),
+    ),
+    CliCommand(
         "migrate", "System", "Import a legacy research.db", "[PATH]",
     ),
     CliCommand(

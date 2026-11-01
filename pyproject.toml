@@ -35,6 +35,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The skill that `synapse-deep-research skills install` copies into other agents.
+[tool.setuptools.package-data]
+synapse_deep_research = ["skill/*.md"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 testpaths = ["tests"]

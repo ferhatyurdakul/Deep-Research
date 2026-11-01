@@ -20,8 +20,8 @@ from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
 from .options import DEPTH_VALUES, STYLE_VALUES, TEMPLATE_VALUES
 from .storage.db import delete_session, fork_session, load_report as db_load
 from .ui import (
-    console, emit_json_error, enable_json_output, fail, glyph, json_output, note, ok,
-    section, tty, warn,
+    console, emit_json_error, enable_json_output, fail, glyph, json_output, kv_grid, note, ok,
+    panel, section, short_path, tty, warn,
 )
 
 
@@ -142,6 +142,18 @@ def build_command_parser(name: str) -> CliParser:
     elif name in ("login", "logout"):
         parser.add_argument("key", nargs="?", metavar="KEY",
                             help="Credential name, e.g. TAVILY_API_KEY" + (" or `all`" if name == "logout" else ""))
+    elif name == "skills":
+        from .skills_install import AGENTS
+        parser.add_argument("action", nargs="?", choices=("install", "uninstall", "list"), default="list",
+                            metavar="ACTION", help="What to do")
+        parser.add_argument("--agent", action="append", choices=[a.key for a in AGENTS] + ["all"],
+                            help="Only this agent; repeat for several, or `all` "
+                                 "(default: every agent found in your home folder)")
+        parser.add_argument("--project", action="store_true",
+                            help="Use the current project's skills folders instead of your home folder's")
+        parser.add_argument("--dir", metavar="PATH",
+                            help="Use this skills folder instead, for an agent that is not listed")
+        parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
     elif name == "migrate":
         parser.add_argument("path", nargs="?", metavar="PATH",
                             help="Legacy research.db to import (default: search common locations)")
@@ -497,6 +509,64 @@ def _do_status(ns: argparse.Namespace) -> None:
     views.print_status()
 
 
+_SKILL_VERBS = {
+    "installed": "installed", "updated": "updated", "unchanged": "already up to date",
+    "removed": "removed", "absent": "not installed",
+}
+
+
+def _print_skill_outcome(outcome, *, dry_run: bool) -> None:
+    label, where = outcome.target.label, escape(short_path(outcome.target.path))
+    if outcome.status == "skipped":
+        warn(f"{label}: {escape(outcome.detail)} ({where})")
+    elif outcome.status in ("unchanged", "absent"):
+        note(f"{label}: {_SKILL_VERBS[outcome.status]}  {where}")
+    else:
+        ok(f"{label}: {'would be ' if dry_run else ''}{_SKILL_VERBS[outcome.status]}  {where}")
+
+
+def _list_skills(skills, files: dict, *, project: bool) -> None:
+    home, cwd = Path.home(), Path.cwd()
+    rows = []
+    for agent in skills.AGENTS:
+        target = skills.choose_targets([agent.key], project=project, home=home, cwd=cwd)[0]
+        state = skills.state(target, files)
+        style = {"installed": "ok", "outdated": "warn"}.get(state, "muted")
+        rows.append((agent.label, Text.assemble(
+            (state, style), ("" if (home / agent.detect).exists() else "  (agent not found)", "muted"),
+            "  ", (short_path(target.path), "muted"),
+        )))
+    console.print(panel(kv_grid(rows), title="Agent skill"))
+    note(f"`{PROG} skills install` puts it where your agents will find it.")
+
+
+def _do_skills(ns: argparse.Namespace) -> None:
+    from . import skills_install as skills
+
+    files = skills.bundled_files()
+    if ns.action == "list":
+        _list_skills(skills, files, project=ns.project)
+        return
+    try:
+        targets = skills.choose_targets(
+            ns.agent or [], project=ns.project, home=Path.home(), cwd=Path.cwd(),
+            directory=Path(ns.dir) if ns.dir else None,
+        )
+    except skills.SkillsError as exc:
+        fail(escape(str(exc)))
+        sys.exit(1)
+    changed = False
+    for target in targets:
+        outcome = (
+            skills.install(target, files, dry_run=ns.dry_run) if ns.action == "install"
+            else skills.uninstall(target, dry_run=ns.dry_run)
+        )
+        _print_skill_outcome(outcome, dry_run=ns.dry_run)
+        changed = changed or outcome.status in ("installed", "updated")
+    if changed and not ns.dry_run:
+        note("An agent that is already running may need a new session (or its skills reload command) to see it.")
+
+
 def _do_migrate(ns: argparse.Namespace) -> None:
     _run_migrate(ns.path)
 
@@ -526,6 +596,7 @@ HANDLERS = {
     "logout": _do_logout,
     "keys": _do_keys,
     "status": _do_status,
+    "skills": _do_skills,
     "migrate": _do_migrate,
     "help": _do_help,
 }

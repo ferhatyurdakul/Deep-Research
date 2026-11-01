@@ -1,8 +1,13 @@
 # Synapse Deep Research
 
-AI research agent that iteratively searches, analyzes, and synthesizes comprehensive reports with evidence-backed citations from web sources and research papers.
+**Deep research on your second AI subscription, so your main agent keeps working.**
 
-Built on [Z.AI](https://z.ai) GLM and [OpenCode Go](https://opencode.ai/go) models. Fully async. CLI tool.
+Synapse is a command-line research agent. Give it a question and it breaks it into sub-questions, searches the web and paper databases (arXiv, Semantic Scholar), reads every source, goes back for what is missing, and writes a report with evidence-backed citations. It runs on a model subscription of its own, [Z.AI](https://z.ai) GLM models or [OpenCode Go](https://opencode.ai/go), so a long research job does not use up your main assistant's usage limits or fill its context window.
+
+Use it two ways:
+
+- **Yourself**, from the terminal: `synapse-deep-research "your question"`.
+- **From your coding agent.** Install the skill once and Claude Code, Codex, Hermes and others can hand a research question to Synapse, keep working, and read the finished report when it is ready. See [Use it from your coding agent](#use-it-from-your-coding-agent).
 
 ## What It Does
 
@@ -97,6 +102,37 @@ Inside the REPL, the same commands are available as slash commands: `/setup`, `/
 **File-based config still works** — handy for CI, scripted overrides, or air-gapped boxes. Either set environment variables directly (`export ZAI_API_KEY=…`), or put them in `./.env` (per-project, wins when present) or `~/.config/synapse-deep-research/.env` (global fallback). The resolution order is: **env var > project `.env` > global `.env` > OS keyring**.
 
 **Diagnostics.** The CLI shows warnings and errors only (retries, failed fetches, rate limits). Set `SYNAPSE_DEEP_RESEARCH_LOG_LEVEL=INFO` — or `DEBUG` — to also see the per-call route details and result counts. Colors follow `NO_COLOR` and are dropped automatically when output is piped.
+
+### Use it from your coding agent
+
+With the tool installed and configured, one command teaches your other coding agents to use it:
+
+```bash
+synapse-deep-research skills install
+```
+
+That copies a small skill (a `SKILL.md` folder in the open [Agent Skills](https://agentskills.io) format) into every supported agent it finds in your home folder. Ask your agent for a deep, sourced investigation and it starts a research run, keeps working while it runs (a run takes minutes), then reads the saved report and the sources behind it.
+
+| Agent | Skills folder |
+|-------|---------------|
+| Claude Code | `~/.claude/skills/` |
+| Codex, Gemini CLI, Cursor, GitHub Copilot, OpenCode | `~/.agents/skills/` (shared, one copy) |
+| Hermes | `~/.hermes/skills/` |
+
+```bash
+synapse-deep-research skills                               # which agents are set up
+synapse-deep-research skills install --agent claude        # one agent (repeat --agent, or use all)
+synapse-deep-research skills install --project             # this project only, not your home folder
+synapse-deep-research skills install --dir ~/path/skills   # an agent that is not listed
+synapse-deep-research skills install --dry-run             # show what would be written
+synapse-deep-research skills uninstall
+```
+
+- It only ever writes or removes the folder named `synapse-deep-research`, and leaves a symlink there alone.
+- Run `skills install` again after upgrading so the skill matches the installed version; `skills` shows `outdated` when it does not.
+- An agent that is already running may need a new session, or its skills reload command, to see the skill. Hermes loads project-level skills only after `hermes skills trust`.
+- The agent runs the tool as you, with your key. You set the key up once with `synapse-deep-research setup`, and the skill tells agents never to ask for a key in the chat.
+- Agents call it with `--json` ([details](#scripts-and-agents---json)), so a run ends as one line of JSON plus a Markdown report on disk.
 
 ### Where files live
 
@@ -417,6 +453,7 @@ source — cap it there rather than throttling your editor.
 
 ```
 src/synapse_deep_research/
+  entry.py                 Console-script entry: carry-over from the old name, then main
   main.py                  CLI entrypoint + command dispatch
   cli_help.py              Command registry, rich --help, styled usage errors
   options.py               Option values + what they mean (shared by help and REPL)
@@ -428,6 +465,9 @@ src/synapse_deep_research/
   userconfig.py            Saved choices (provider, model per stage)
   config.py                Settings from .env
   credentials.py           OS-keyring credential access
+  legacy_install.py        One-time copy of settings, sessions and keys from the old `deep-research`
+  skills_install.py        `skills` command: copies the agent skill into Claude Code, Codex, ...
+  skill/SKILL.md           The agent skill that ships with the package
   setup_wizard.py          setup / login / logout / keys flows
   logging_config.py        Logging setup
   llm.py                   LLM client (sync + async, multi-provider)
