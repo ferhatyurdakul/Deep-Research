@@ -1,4 +1,4 @@
-"""Benchmark runner for Deep Research evals.
+"""Benchmark runner for Synapse Deep Research evals.
 
 Runs a subset of benchmarks, saves reports + mechanical checks to
 evals/runs/<timestamp>/, and prints a summary.
@@ -25,11 +25,11 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "src"))
 
-from deep_research.config import settings
-from deep_research.logging_config import setup_logging
-from deep_research.models import ReportStyle, ResearchConfig, ResearchDepth
-from deep_research.pipeline.agent import arun_agent_research
-from deep_research.pipeline.orchestrator import arun_research
+from synapse_deep_research.config import settings
+from synapse_deep_research.logging_config import setup_logging
+from synapse_deep_research.models import ReportStyle, ResearchConfig, ResearchDepth
+from synapse_deep_research.pipeline.agent import arun_agent_research
+from synapse_deep_research.pipeline.orchestrator import arun_research
 
 from evals.benchmarks import select
 from evals.checks import run_all, summary_line
@@ -136,7 +136,7 @@ def _print_summary(results: list[dict]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Deep Research evaluation benchmarks")
+    parser = argparse.ArgumentParser(description="Run Synapse Deep Research evaluation benchmarks")
     parser.add_argument("--tag", default="smoke", help="Run benchmarks matching this tag (default: smoke)")
     parser.add_argument("--id", nargs="*", help="Run specific benchmarks by id")
     parser.add_argument("--label", default="", help="Optional label appended to run directory")

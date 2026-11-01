@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from deep_research.models import (
+from synapse_deep_research.models import (
     ResearchConfig,
     ResearchDepth,
     ResearchReport,
@@ -79,7 +79,7 @@ async def _fake_gaps(query, sub_questions, analyses, searched_queries, thinking=
 
 
 def _wire_pipeline(monkeypatch):
-    import deep_research.pipeline.orchestrator as orch
+    import synapse_deep_research.pipeline.orchestrator as orch
     monkeypatch.setattr(orch, "SearchAggregator", _FakeAggregator)
     monkeypatch.setattr(orch, "ContentParser", _FakeParser)
     monkeypatch.setattr(orch, "adecompose_query", _fake_decompose)
@@ -92,7 +92,7 @@ def _wire_pipeline(monkeypatch):
 async def test_full_run_completes_offline(monkeypatch):
     orch = _wire_pipeline(monkeypatch)
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary\nKey result [1].", "## Findings\nDetail [1].", ["next?"])
@@ -101,7 +101,7 @@ async def test_full_run_completes_offline(monkeypatch):
 
     # Spy on the concurrency setter to confirm the config value is applied.
     seen = {}
-    import deep_research.pipeline.analyzer as analyzer
+    import synapse_deep_research.pipeline.analyzer as analyzer
     real_set = analyzer.set_llm_concurrency
     monkeypatch.setattr(orch, "set_llm_concurrency", lambda n: seen.setdefault("n", n) or real_set(n))
 
@@ -122,7 +122,7 @@ async def test_full_run_completes_offline(monkeypatch):
 async def test_synthesis_failure_yields_saved_partial(monkeypatch):
     orch = _wire_pipeline(monkeypatch)
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _boom(*args, **kwargs):
         raise RuntimeError("429 Too Many Requests during synthesis")
@@ -147,7 +147,7 @@ async def test_partial_analysis_failure_skips_failed_sources(monkeypatch):
     orch = _wire_pipeline(monkeypatch)
     monkeypatch.setattr(orch, "aanalyze_source", _analyze_failing_for({"https://a.example/1"}))
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary\nKey result [1].", "## Findings\nDetail [1].", ["next?"])
@@ -172,7 +172,7 @@ async def test_all_analysis_failures_abort_run(monkeypatch):
         _analyze_failing_for({"https://a.example/1", "https://b.example/2"}),
     )
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary", "## Findings", [])
@@ -197,7 +197,7 @@ async def test_gap_failure_after_sources_yields_partial(monkeypatch):
 
     monkeypatch.setattr(orch, "aidentify_gaps", _boom)
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary\nKey result [1].", "## Findings\nDetail [1].", ["next?"])
@@ -216,7 +216,7 @@ async def test_gap_failure_after_sources_yields_partial(monkeypatch):
 @pytest.mark.asyncio
 async def test_agent_search_and_analyze_skips_failed_sources(monkeypatch):
     """Agent mode shares the skip-don't-abort policy for failed analyses."""
-    import deep_research.pipeline.agent as agent_mod
+    import synapse_deep_research.pipeline.agent as agent_mod
 
     monkeypatch.setattr(agent_mod, "ContentParser", _FakeParser)
     monkeypatch.setattr(agent_mod, "aanalyze_source", _analyze_failing_for({"https://a.example/1"}))
@@ -232,7 +232,7 @@ async def test_agent_search_and_analyze_skips_failed_sources(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_search_and_analyze_all_failed_raises(monkeypatch):
-    import deep_research.pipeline.agent as agent_mod
+    import synapse_deep_research.pipeline.agent as agent_mod
 
     monkeypatch.setattr(agent_mod, "ContentParser", _FakeParser)
     monkeypatch.setattr(
@@ -253,7 +253,7 @@ async def test_scrape_budget_caps_fetched_pages(monkeypatch):
     snippet-only sources instead of being scraped."""
     orch = _wire_pipeline(monkeypatch)
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary\nKey result [1].", "## Findings\nDetail [1].", ["next?"])
@@ -279,7 +279,7 @@ async def test_known_urls_are_skipped_and_searched_urls_run_scoped(monkeypatch):
     orch = _wire_pipeline(monkeypatch)
     monkeypatch.setattr(orch, "get_known_urls", lambda: {"a.example/1"})
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary", "## Findings", [])
@@ -308,7 +308,7 @@ async def test_continue_research_honors_template(monkeypatch):
     )
     monkeypatch.setattr(orch, "get_template", lambda key: tmpl)
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     synth_kwargs = {}
 
@@ -355,7 +355,7 @@ async def test_academic_mode_decides_which_sources_are_searched(
 
     monkeypatch.setattr(orch, "SearchAggregator", _Spy)
 
-    import deep_research.pipeline.synthesizer as synth
+    import synapse_deep_research.pipeline.synthesizer as synth
 
     async def _fake_synth(*args, **kwargs):
         return ("## Executive Summary", "## Findings", [])

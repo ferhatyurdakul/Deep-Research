@@ -15,13 +15,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research import main as main_mod
-from deep_research import views
-from deep_research.cli_help import COMMANDS, GROUPS, INDEX
-from deep_research.models import (
+from synapse_deep_research import main as main_mod
+from synapse_deep_research import views
+from synapse_deep_research.cli_help import COMMANDS, GROUPS, INDEX
+from synapse_deep_research.models import (
     ResearchIteration, ResearchReport, SourceAnalysis, SubQuestion,
 )
-from deep_research.options import (
+from synapse_deep_research.options import (
     CHOICE_DOCS, DEPTH_VALUES, STYLE_VALUES, TEMPLATE_VALUES,
 )
 
@@ -41,7 +41,7 @@ def _restore_logging():
 
 def _run(argv, monkeypatch, capsys):
     """Run main() in-process; returns (exit_code, stdout, stderr)."""
-    monkeypatch.setattr(sys, "argv", ["deep-research", *argv])
+    monkeypatch.setattr(sys, "argv", ["synapse-deep-research", *argv])
     code = 0
     try:
         main_mod.main()
@@ -54,9 +54,9 @@ def _run(argv, monkeypatch, capsys):
 @pytest.fixture
 def isolated_store(tmp_path, monkeypatch):
     """Point the session DB and the markdown output dir at tmp_path."""
-    import deep_research.config as cfg
-    import deep_research.output.report as report_mod
-    import deep_research.storage.db as db_mod
+    import synapse_deep_research.config as cfg
+    import synapse_deep_research.output.report as report_mod
+    import synapse_deep_research.storage.db as db_mod
 
     db = tmp_path / "research.db"
     monkeypatch.setattr(cfg, "DB_PATH", db)
@@ -136,7 +136,7 @@ class TestHelpOutput:
     def test_command_help_exits_zero_with_usage(self, name, monkeypatch, capsys):
         code, out, _ = _run([name, "--help"], monkeypatch, capsys)
         assert code == 0
-        assert f"deep-research {name}" in out
+        assert f"synapse-deep-research {name}" in out
         assert "Usage" in out
 
     def test_help_command_matches_flag(self, monkeypatch, capsys):
@@ -150,7 +150,7 @@ class TestHelpOutput:
         assert "Unknown command" in out and "history" in out
 
     def test_version_flag(self, monkeypatch, capsys):
-        from deep_research import __version__
+        from synapse_deep_research import __version__
         code, out, _ = _run(["--version"], monkeypatch, capsys)
         assert code == 0 and __version__ in out
 
@@ -202,7 +202,7 @@ class TestPapersFlags:
         ([], "science", True),                                   # auto follows it
     ])
     def test_run_config_after_the_template_is_applied(self, argv, template, expected):
-        from deep_research.pipeline.templates import get_template
+        from synapse_deep_research.pipeline.templates import get_template
 
         args = self._args(*argv, *(["--template", template] if template else []))
         config = main_mod.build_config(args)
@@ -226,7 +226,7 @@ class TestParserErrors:
     def test_non_integer_id(self, monkeypatch, capsys):
         code, _, err = _run(["inspect", "abc"], monkeypatch, capsys)
         assert code == 2
-        assert "usage: deep-research inspect ID" in err
+        assert "usage: synapse-deep-research inspect ID" in err
 
     def test_legacy_flags_still_rejected(self, monkeypatch, capsys):
         code, _, err = _run(["--history"], monkeypatch, capsys)
@@ -248,7 +248,7 @@ class TestViews:
         assert "No research sessions found" in out
 
     def test_history_shows_fork_lineage_and_survives_markup_in_query(self, isolated_store, capsys):
-        from deep_research.storage.db import save_report
+        from synapse_deep_research.storage.db import save_report
 
         a = save_report(_report("plain query"), depth="quick")
         save_report(_report("has [bold]markup[/] and [/oops]"), depth="deep", parent_session_id=a)
@@ -259,14 +259,14 @@ class TestViews:
         assert "↳" in out or "^" in out  # the fork column
 
     def test_history_repl_hints_use_slash_commands(self, isolated_store, capsys):
-        from deep_research.storage.db import save_report
+        from synapse_deep_research.storage.db import save_report
 
         save_report(_report(), depth="standard")
         views.print_history(repl=True)
         assert "/inspect" in capsys.readouterr().out
 
     def test_inspect_session_and_source(self, isolated_store, capsys):
-        from deep_research.storage.db import save_report
+        from synapse_deep_research.storage.db import save_report
 
         sid = save_report(_report(), depth="standard")
         views.print_session(main_mod.db_load(sid), sid)
@@ -286,7 +286,7 @@ class TestViews:
     def test_banner_shows_query_and_shape(self, capsys):
         views.print_banner(shape="deep depth", query="my [question]")
         out = capsys.readouterr().out
-        assert "Deep Research" in out and "deep depth" in out and "my [question]" in out
+        assert "Synapse Deep Research" in out and "deep depth" in out and "my [question]" in out
 
     def test_shape_summary_only_lists_enabled_toggles(self):
         assert views.shape_summary("standard", "standard") == "standard depth · standard style"
@@ -300,7 +300,7 @@ class TestViews:
         assert "papers" not in views.shape_summary("standard", "standard", "market")
 
     def test_present_report_saves_and_prints_card(self, isolated_store, capsys):
-        from deep_research.storage.db import load_report
+        from synapse_deep_research.storage.db import load_report
 
         sid = views.present_report(_report(), depth="standard", started=None)
         out = capsys.readouterr().out
@@ -309,7 +309,7 @@ class TestViews:
         assert any((isolated_store / "outputs").glob("*.md"))
 
     def test_present_report_records_parent_and_relation(self, isolated_store, capsys):
-        from deep_research.storage.db import load_report, save_report
+        from synapse_deep_research.storage.db import load_report, save_report
 
         parent = save_report(_report(), depth="standard")
         sid = views.present_report(
@@ -322,7 +322,7 @@ class TestViews:
         assert f"/continue {sid}" in out  # REPL-flavoured next steps
 
     def test_display_report_numbers_follow_ups(self, capsys):
-        from deep_research.output.report import display_report
+        from synapse_deep_research.output.report import display_report
 
         display_report(_report())
         out = capsys.readouterr().out
@@ -334,7 +334,7 @@ class TestViews:
 class TestMainFlows:
     def test_async_main_runs_saves_and_reports(self, isolated_store, monkeypatch, capsys):
         import asyncio
-        from deep_research.models import ResearchConfig, ResearchDepth
+        from synapse_deep_research.models import ResearchConfig, ResearchDepth
 
         async def fake(query, config, agent):
             return _report(query)
@@ -348,7 +348,7 @@ class TestMainFlows:
 
     def test_async_main_failure_prints_error_and_exits_1(self, isolated_store, monkeypatch, capsys):
         import asyncio
-        from deep_research.models import ResearchConfig, ResearchDepth
+        from synapse_deep_research.models import ResearchConfig, ResearchDepth
 
         async def boom(query, config, agent):
             raise RuntimeError("provider said [/nope]")
@@ -376,25 +376,25 @@ class TestMainFlows:
 
 class TestUiHelpers:
     def test_fmt_duration(self):
-        from deep_research.ui import fmt_duration
+        from synapse_deep_research.ui import fmt_duration
         assert fmt_duration(0) == "0s"
         assert fmt_duration(42.4) == "42s"
         assert fmt_duration(102) == "1m 42s"
         assert fmt_duration(3725) == "1h 02m"
 
     def test_plural(self):
-        from deep_research.ui import plural
+        from synapse_deep_research.ui import plural
         assert plural(1, "source") == "1 source"
         assert plural(0, "source") == "0 sources"
         assert plural(3, "gap") == "3 gaps"
 
     def test_truncate_collapses_whitespace(self):
-        from deep_research.ui import truncate
+        from synapse_deep_research.ui import truncate
         assert truncate("a\nb   c", 10) == "a b c"
         assert truncate("x" * 20, 10) == "x" * 9 + "…"
 
     def test_short_path_prefers_cwd_then_home(self, tmp_path, monkeypatch):
-        from deep_research.ui import short_path
+        from synapse_deep_research.ui import short_path
         monkeypatch.chdir(tmp_path)
         assert short_path(tmp_path / "outputs" / "r.md") == os.path.join("outputs", "r.md")
         elsewhere = os.path.expanduser("~/definitely/elsewhere/r.md")
@@ -402,7 +402,7 @@ class TestUiHelpers:
         assert short_path(__import__("pathlib").Path(elsewhere)) == "~/definitely/elsewhere/r.md"
 
     def test_glyphs_fall_back_to_ascii(self, monkeypatch):
-        from deep_research import ui
+        from synapse_deep_research import ui
         monkeypatch.setattr(type(ui.console), "encoding", property(lambda self: "ascii"))
         assert ui.glyph("ok") == "+"
         monkeypatch.setattr(type(ui.console), "encoding", property(lambda self: "utf-8"))
@@ -414,19 +414,19 @@ class TestLogging:
         """Root logger with none of our own handlers (restored by the autouse fixture)."""
         import logging
         root = logging.getLogger()
-        root.handlers[:] = [h for h in root.handlers if not getattr(h, "_deep_research_cli", False)]
+        root.handlers[:] = [h for h in root.handlers if not getattr(h, "_synapse_cli", False)]
         return root
 
     def test_cli_logging_goes_through_the_console_without_markup(self, monkeypatch, capsys):
         import logging
 
-        from deep_research.logging_config import setup_logging
-        from deep_research.ui import console
+        from synapse_deep_research.logging_config import setup_logging
+        from synapse_deep_research.ui import console
 
         self._fresh_root(monkeypatch)
         setup_logging("WARNING", console=console)
-        logging.getLogger("deep_research.test").warning("fetch failed for [bold]x[/bold]")
-        logging.getLogger("deep_research.test").info("hidden at WARNING")
+        logging.getLogger("synapse_deep_research.test").warning("fetch failed for [bold]x[/bold]")
+        logging.getLogger("synapse_deep_research.test").info("hidden at WARNING")
         out = capsys.readouterr().out
         assert "fetch failed for [bold]x[/bold]" in out  # literal, not interpreted
         assert "hidden at WARNING" not in out
@@ -434,14 +434,14 @@ class TestLogging:
     def test_setup_is_idempotent(self, monkeypatch):
         import logging
 
-        from deep_research.logging_config import setup_logging
-        from deep_research.ui import console
+        from synapse_deep_research.logging_config import setup_logging
+        from synapse_deep_research.ui import console
 
         root = self._fresh_root(monkeypatch)
         before = len(root.handlers)
         setup_logging("WARNING", console=console)
         setup_logging("INFO", console=console)
-        ours = [h for h in root.handlers if getattr(h, "_deep_research_cli", False)]
+        ours = [h for h in root.handlers if getattr(h, "_synapse_cli", False)]
         assert len(ours) == 1 and len(root.handlers) == before + 1
         assert root.level == logging.INFO
 
@@ -449,13 +449,13 @@ class TestLogging:
         import logging
 
         self._fresh_root(monkeypatch)
-        monkeypatch.setattr(sys, "argv", ["deep-research", "--version"])
-        monkeypatch.delenv("DEEP_RESEARCH_LOG_LEVEL", raising=False)
+        monkeypatch.setattr(sys, "argv", ["synapse-deep-research", "--version"])
+        monkeypatch.delenv("SYNAPSE_DEEP_RESEARCH_LOG_LEVEL", raising=False)
         with pytest.raises(SystemExit):
             main_mod.main()
         assert logging.getLogger().level == logging.WARNING
 
-        monkeypatch.setenv("DEEP_RESEARCH_LOG_LEVEL", "DEBUG")
+        monkeypatch.setenv("SYNAPSE_DEEP_RESEARCH_LOG_LEVEL", "DEBUG")
         with pytest.raises(SystemExit):
             main_mod.main()
         assert logging.getLogger().level == logging.DEBUG
@@ -468,12 +468,12 @@ class TestStartupCost:
         import subprocess
 
         code = (
-            "import sys; sys.argv=['deep-research','--help'];"
-            "from deep_research import main\n"
+            "import sys; sys.argv=['synapse-deep-research','--help'];"
+            "from synapse_deep_research import main\n"
             "try:\n    main.main()\n"
             "except SystemExit: pass\n"
-            "heavy=[m for m in ('openai','anthropic','tavily','deep_research.pipeline.orchestrator',"
-            "'deep_research.pipeline.agent') if m in sys.modules]\n"
+            "heavy=[m for m in ('openai','anthropic','tavily','synapse_deep_research.pipeline.orchestrator',"
+            "'synapse_deep_research.pipeline.agent') if m in sys.modules]\n"
             "print('HEAVY:', heavy)"
         )
         result = subprocess.run(
@@ -486,20 +486,20 @@ class TestStartupCost:
 
 class TestViewer:
     def test_view_lines_trims_blank_edges_and_keeps_inner_blanks(self):
-        from deep_research.interactive import view_lines
+        from synapse_deep_research.interactive import view_lines
 
         lines = view_lines("\n\nfirst\n\nsecond\n\n")
         assert ["".join(t for _, t in l) for l in lines] == ["first", "", "second"]
 
     def test_hyperlink_escapes_are_stripped(self):
-        from deep_research.interactive import view_lines
+        from synapse_deep_research.interactive import view_lines
 
         linked = "see \x1b]8;id=1;https://e.com\x1b\\the docs\x1b]8;;\x1b\\ now"
         text = "".join(t for _, t in view_lines(linked)[0])
         assert text == "see the docs now"
 
     def test_ansi_colors_survive_as_styles(self):
-        from deep_research.interactive import view_lines
+        from synapse_deep_research.interactive import view_lines
 
         frags = view_lines("\x1b[1;36mCyan\x1b[0m plain")[0]
         assert any("ansicyan" in style for style, _ in frags)
@@ -508,7 +508,7 @@ class TestViewer:
     def test_every_close_key_dismisses(self, keys):
         from prompt_toolkit.input import create_pipe_input
         from prompt_toolkit.output import DummyOutput
-        from deep_research.interactive import show_view
+        from synapse_deep_research.interactive import show_view
 
         with create_pipe_input() as pipe:
             pipe.send_text(keys)
@@ -517,7 +517,7 @@ class TestViewer:
     def test_scrolling_a_tall_view_then_closing(self):
         from prompt_toolkit.input import create_pipe_input
         from prompt_toolkit.output import DummyOutput
-        from deep_research.interactive import show_view
+        from synapse_deep_research.interactive import show_view
 
         text = "\n".join(f"line {i}" for i in range(60))
         with create_pipe_input() as pipe:
@@ -525,13 +525,13 @@ class TestViewer:
             show_view(text, rows=10, input=pipe, output=DummyOutput())
 
     def test_empty_output_is_not_shown(self):
-        from deep_research.interactive import show_view
+        from synapse_deep_research.interactive import show_view
         show_view("   \n\n")  # would hang waiting for a key if it opened
 
 
 class TestProblemCounter:
     def test_only_warnings_and_failures_count(self):
-        from deep_research import ui
+        from synapse_deep_research import ui
 
         before = ui.problem_count()
         ui.ok("fine")
@@ -544,7 +544,7 @@ class TestProblemCounter:
 
 class TestModelHelpers:
     def test_model_choices_list_current_models_flagship_first_and_describe_each(self):
-        from deep_research.options import model_choices
+        from synapse_deep_research.options import model_choices
 
         rows = model_choices("zai")
         assert [m for m, _ in rows] == ["glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1"]
@@ -553,7 +553,7 @@ class TestModelHelpers:
         assert "glm-4.5-air" not in blurbs  # legacy models are registered but not offered
 
     def test_model_choices_tag_the_recommendation_for_a_stage(self):
-        from deep_research.options import model_choices
+        from synapse_deep_research.options import model_choices
 
         analyze = dict(model_choices("zai", "analyze"))
         assert analyze["glm-5.3-flash"].startswith("recommended")
@@ -562,7 +562,7 @@ class TestModelHelpers:
         assert synth["glm-5.3"].startswith("recommended")
 
     def test_stage_summary(self):
-        from deep_research.options import stage_summary
+        from synapse_deep_research.options import stage_summary
 
         same = {"decompose": "a", "analyze": "a", "gap_analysis": "a", "synthesize": "a"}
         assert stage_summary(same) == "a"
@@ -573,7 +573,7 @@ class TestModelHelpers:
         assert stage_summary({}) == "?"
 
     def test_banner_shows_what_each_stage_uses(self, monkeypatch, capsys):
-        from deep_research.config import Settings
+        from synapse_deep_research.config import Settings
 
         monkeypatch.setattr(views, "settings", Settings(llm_provider="zai", zai_api_key="x"))
         views.print_banner(shape="standard depth")

@@ -14,10 +14,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import deep_research.onboarding as onboarding
-from deep_research import userconfig
-from deep_research.capabilities import PIPELINE_STAGES, recommended_stage_models
-from deep_research.config import Settings
+import synapse_deep_research.onboarding as onboarding
+from synapse_deep_research import userconfig
+from synapse_deep_research.capabilities import PIPELINE_STAGES, recommended_stage_models
+from synapse_deep_research.config import Settings
 
 
 class _FakeKeyring:
@@ -42,7 +42,7 @@ class _FakeKeyring:
 @pytest.fixture
 def env(monkeypatch):
     """A terminal, an empty in-memory keyring, and a fresh Settings the flow can mutate."""
-    from deep_research import credentials
+    from synapse_deep_research import credentials
 
     fake = _FakeKeyring()
     monkeypatch.setattr(credentials, "_backend", lambda: fake)
@@ -101,8 +101,8 @@ class TestRunSetup:
                       texts=["sk-test-key", ""])           # API key, no Tavily key
         assert onboarding.run_setup(first_run=True) is True
 
-        assert env.keyring.store[("deep-research", "ZAI_API_KEY")] == "sk-test-key"
-        assert ("deep-research", "TAVILY_API_KEY") not in env.keyring.store
+        assert env.keyring.store[("synapse-deep-research", "ZAI_API_KEY")] == "sk-test-key"
+        assert ("synapse-deep-research", "TAVILY_API_KEY") not in env.keyring.store
         assert userconfig.provider() == "zai"
         assert userconfig.stage_models("zai") == recommended_stage_models("zai").as_dict()
         assert env.settings.zai_api_key == "sk-test-key"        # live settings see the new key
@@ -141,31 +141,31 @@ class TestRunSetup:
     def test_the_search_key_is_stored_when_given(self, env, monkeypatch):
         script(monkeypatch, picks=["zai", "recommended", "skip"], texts=["sk-k", " tvly-abc "])
         onboarding.run_setup()
-        assert env.keyring.store[("deep-research", "TAVILY_API_KEY")] == "tvly-abc"
+        assert env.keyring.store[("synapse-deep-research", "TAVILY_API_KEY")] == "tvly-abc"
 
     def test_esc_on_the_optional_search_key_just_skips_it(self, env, monkeypatch):
         script(monkeypatch, picks=["zai", "recommended", "skip"], texts=["sk-k", None])
         assert onboarding.run_setup() is True
-        assert ("deep-research", "TAVILY_API_KEY") not in env.keyring.store
+        assert ("synapse-deep-research", "TAVILY_API_KEY") not in env.keyring.store
 
     def test_picking_the_other_provider(self, env, monkeypatch):
         script(monkeypatch, picks=["opencode-go", "recommended", "skip"], texts=["oc-key", ""])
         assert onboarding.run_setup() is True
-        assert env.keyring.store[("deep-research", "OPENCODE_API_KEY")] == "oc-key"
+        assert env.keyring.store[("synapse-deep-research", "OPENCODE_API_KEY")] == "oc-key"
         assert userconfig.provider() == "opencode-go"
         assert set(userconfig.stage_models("opencode-go").values()) == {"glm-5.1"}
 
     def test_an_existing_key_is_kept_on_enter(self, env, monkeypatch):
-        env.keyring.set_password("deep-research", "ZAI_API_KEY", "old-key")
+        env.keyring.set_password("synapse-deep-research", "ZAI_API_KEY", "old-key")
         seen = script(monkeypatch, picks=["zai", "recommended", "skip"], texts=["", ""])
         assert onboarding.run_setup() is True
-        assert env.keyring.store[("deep-research", "ZAI_API_KEY")] == "old-key"
+        assert env.keyring.store[("synapse-deep-research", "ZAI_API_KEY")] == "old-key"
         assert "keeps the key" in seen["texts"][0][1]["hint"]
 
     def test_a_key_is_required_when_there_is_none(self, env, monkeypatch):
         seen = script(monkeypatch, picks=["zai", "recommended", "skip"], texts=["   ", "sk-second", ""])
         assert onboarding.run_setup() is True
-        assert env.keyring.store[("deep-research", "ZAI_API_KEY")] == "sk-second"
+        assert env.keyring.store[("synapse-deep-research", "ZAI_API_KEY")] == "sk-second"
         assert "required" in seen["texts"][1][1]["hint"]
 
     def test_the_search_key_hint_is_hidden_input_too(self, env, monkeypatch):
@@ -230,7 +230,7 @@ class TestConnectionCheck:
         assert calls == []
 
     def test_verify_makes_one_request_per_distinct_model_and_reports_errors(self, monkeypatch):
-        import deep_research.llm as llm
+        import synapse_deep_research.llm as llm
 
         asked = []
 
@@ -263,7 +263,7 @@ class TestSummaryWarnings:
 
 class TestFirstRunTrigger:
     def _run_repl_with(self, monkeypatch, *, tty, needs):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         calls = []
 
@@ -289,7 +289,7 @@ class TestFirstRunTrigger:
         assert self._run_repl_with(monkeypatch, tty=False, needs=True) == []
 
     def test_setup_runs_before_the_banner(self, monkeypatch, capsys):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         order = []
         monkeypatch.setattr(repl_mod, "run_setup", lambda **kw: order.append("setup") or True)
@@ -309,7 +309,7 @@ class TestFirstRunTrigger:
 
 class TestOneShotGate:
     def test_without_a_terminal_a_missing_key_exits_with_a_pointer(self, monkeypatch, capsys):
-        import deep_research.main as main_mod
+        import synapse_deep_research.main as main_mod
 
         monkeypatch.setattr(main_mod, "check_config", lambda: False)
         monkeypatch.setattr(main_mod, "tty", lambda: False)
@@ -317,10 +317,10 @@ class TestOneShotGate:
         with pytest.raises(SystemExit) as ei:
             main_mod._ensure_ready()
         assert ei.value.code == 1
-        assert "deep-research setup" in capsys.readouterr().out
+        assert "synapse-deep-research setup" in capsys.readouterr().out
 
     def test_with_a_terminal_it_opens_setup_and_exits_if_it_was_skipped(self, monkeypatch, capsys):
-        import deep_research.main as main_mod
+        import synapse_deep_research.main as main_mod
 
         opened = []
         monkeypatch.setattr(main_mod, "check_config", lambda: False)
@@ -337,15 +337,15 @@ class TestOneShotGate:
 
 class TestRetiredRouteSetting:
     def test_llm_route_in_the_environment_gets_a_notice(self, monkeypatch, capsys):
-        import deep_research.main as main_mod
+        import synapse_deep_research.main as main_mod
 
         monkeypatch.setenv("LLM_ROUTE", "quality")
         main_mod._warn_retired_settings()
         out = " ".join(capsys.readouterr().out.split())
-        assert "LLM_ROUTE is no longer used" in out and "deep-research setup" in out
+        assert "LLM_ROUTE is no longer used" in out and "synapse-deep-research setup" in out
 
     def test_silent_when_it_is_not_set(self, monkeypatch, capsys):
-        import deep_research.main as main_mod
+        import synapse_deep_research.main as main_mod
 
         monkeypatch.delenv("LLM_ROUTE", raising=False)
         main_mod._warn_retired_settings()
@@ -356,7 +356,7 @@ class TestAskText:
     def _ask(self, keys, **kw):
         from prompt_toolkit.input import create_pipe_input
         from prompt_toolkit.output import DummyOutput
-        from deep_research.interactive import ask_text
+        from synapse_deep_research.interactive import ask_text
 
         with create_pipe_input() as pipe:
             pipe.send_text(keys)

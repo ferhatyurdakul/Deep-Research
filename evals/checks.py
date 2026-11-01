@@ -1,4 +1,4 @@
-"""Mechanical checks for Deep Research reports.
+"""Mechanical checks for Synapse Deep Research reports.
 
 These are deterministic, cheap, and catch regressions in:
   - citation quality (density, coverage, invalid refs)
@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from deep_research.models import ContentDepth, ReportStyle, ResearchReport
+from synapse_deep_research.models import ContentDepth, ReportStyle, ResearchReport
 
 # --- Tone: phrases banned by the synthesis prompt ---
 BANNED_PHRASES = [

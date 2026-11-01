@@ -15,8 +15,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research.models import ReportStyle, ResearchDepth
-from deep_research.repl import COMMANDS, ReplState, dispatch
+from synapse_deep_research.models import ReportStyle, ResearchDepth
+from synapse_deep_research.repl import COMMANDS, ReplState, dispatch
 
 
 class TestStateMutations:
@@ -109,33 +109,33 @@ class TestCommandRegistry:
 
 class TestProviderAndRouteCommands:
     def test_route_command_is_gone(self):
-        from deep_research.repl import _COMMAND_INDEX
+        from synapse_deep_research.repl import _COMMAND_INDEX
 
         assert "/route" not in _COMMAND_INDEX
         with pytest.raises(KeyError):
             dispatch("/route quality", ReplState())
 
     def test_provider_switch_is_saved(self):
-        from deep_research import userconfig
-        from deep_research import config as cfg_module
-        from deep_research.config import Settings as _Settings
+        from synapse_deep_research import userconfig
+        from synapse_deep_research import config as cfg_module
+        from synapse_deep_research.config import Settings as _Settings
         custom = _Settings(llm_provider="zai", zai_api_key="x", opencode_api_key="y", opencode_model="glm-5.1")
         with patch.object(cfg_module, "settings", custom), \
-             patch.object(__import__("deep_research.repl", fromlist=["settings"]),
+             patch.object(__import__("synapse_deep_research.repl", fromlist=["settings"]),
                           "settings", custom):
             dispatch("/provider opencode-go", ReplState())
             assert custom.llm_provider == "opencode-go"
             assert userconfig.provider() == "opencode-go"   # chosen in the app, so it sticks
 
     def test_provider_invalid_rolls_back(self):
-        from deep_research import config as cfg_module
-        from deep_research.config import Settings as _Settings
+        from synapse_deep_research import config as cfg_module
+        from synapse_deep_research.config import Settings as _Settings
         custom = _Settings(
             llm_provider="opencode-go", opencode_api_key="x",
             opencode_model="glm-5.1",
         )
         with patch.object(cfg_module, "settings", custom), \
-             patch.object(__import__("deep_research.repl", fromlist=["settings"]),
+             patch.object(__import__("synapse_deep_research.repl", fromlist=["settings"]),
                           "settings", custom):
             s = ReplState()
             dispatch("/provider made-up-provider", s)
@@ -144,7 +144,7 @@ class TestProviderAndRouteCommands:
 
 class TestForkCommand:
     def test_fork_dispatches_with_optional_query(self, monkeypatch, capsys):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         calls = {}
 
@@ -163,11 +163,11 @@ class TestReplLaunch:
     def test_bare_launch_boots_and_quits(self):
         """Regression: main() once referenced a removed argparse attribute
         (args.thinking) when constructing ReplState, crashing bare
-        `deep-research` before the prompt appeared."""
+        `synapse-deep-research` before the prompt appeared."""
         import subprocess
 
         result = subprocess.run(
-            [sys.executable, "-m", "deep_research.main"],
+            [sys.executable, "-m", "synapse_deep_research.main"],
             input="/q\n", capture_output=True, text=True, timeout=60,
         )
         assert result.returncode == 0
@@ -177,8 +177,8 @@ class TestReplLaunch:
 
 class TestStatusFragments:
     def test_minimal_status_shows_only_non_defaults(self):
-        from deep_research.models import ResearchDepth
-        from deep_research.repl import ReplState, _status_fragments
+        from synapse_deep_research.models import ResearchDepth
+        from synapse_deep_research.repl import ReplState, _status_fragments
 
         text = "".join(t for _, t in _status_fragments(ReplState()))
         assert text.startswith(" standard")
@@ -196,7 +196,7 @@ class TestStatusFragments:
     def test_slash_only_completer_blocks_plain_queries(self):
         from prompt_toolkit.completion import CompleteEvent
         from prompt_toolkit.document import Document
-        from deep_research.repl import _command_completer
+        from synapse_deep_research.repl import _command_completer
 
         c = _command_completer()
         assert list(c.get_completions(Document("/", 1), CompleteEvent()))
@@ -205,7 +205,7 @@ class TestStatusFragments:
 
 class TestHelpAndPickers:
     def test_help_lists_every_command_under_its_group(self, capsys):
-        from deep_research.repl import GROUPS
+        from synapse_deep_research.repl import GROUPS
 
         dispatch("/help", ReplState())
         out = capsys.readouterr().out
@@ -215,7 +215,7 @@ class TestHelpAndPickers:
             assert cmd.name in out, cmd.name
 
     def test_every_command_belongs_to_a_known_group(self):
-        from deep_research.repl import GROUPS
+        from synapse_deep_research.repl import GROUPS
         assert {c.group for c in COMMANDS} <= set(GROUPS)
 
     def test_help_for_one_command_shows_values_with_meanings(self, capsys):
@@ -262,13 +262,13 @@ class TestHelpAndPickers:
 
 class TestUnknownCommandSuggestions:
     def test_suggests_closest_command(self):
-        from deep_research.repl import suggest_command
+        from synapse_deep_research.repl import suggest_command
         assert suggest_command("/histroy") == "/history"
         assert suggest_command("/dpth") == "/depth"
         assert suggest_command("/zzzzzzzz") is None
 
     def test_unknown_command_message_includes_suggestion(self, capsys):
-        from deep_research.repl import _unknown_command
+        from synapse_deep_research.repl import _unknown_command
         _unknown_command("/histroy")
         out = capsys.readouterr().out
         assert "Did you mean /history" in out
@@ -291,12 +291,12 @@ class TestQueryPersistence:
         finished REPL run raised NameError before the session was stored."""
         import asyncio
 
-        import deep_research.config as cfg
-        import deep_research.main as main_mod
-        import deep_research.output.report as report_mod
-        import deep_research.storage.db as db_mod
-        from deep_research.models import ResearchReport, SourceAnalysis
-        from deep_research.repl import _run_query
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.main as main_mod
+        import synapse_deep_research.output.report as report_mod
+        import synapse_deep_research.storage.db as db_mod
+        from synapse_deep_research.models import ResearchReport, SourceAnalysis
+        from synapse_deep_research.repl import _run_query
 
         db = tmp_path / "research.db"
         monkeypatch.setattr(cfg, "DB_PATH", db)
@@ -324,8 +324,8 @@ class TestQueryPreflight:
         /setup rather than starting a run that dies in the SDK."""
         import asyncio
 
-        import deep_research.main as main_mod
-        from deep_research.repl import _run_query
+        import synapse_deep_research.main as main_mod
+        from synapse_deep_research.repl import _run_query
 
         calls = []
 
@@ -333,7 +333,7 @@ class TestQueryPreflight:
             calls.append(query)
 
         def no_key():
-            from deep_research.ui import fail
+            from synapse_deep_research.ui import fail
             fail("ZAI_API_KEY is not set")
             return False
 
@@ -349,7 +349,7 @@ class TestCompleter:
     def _complete(self, text):
         from prompt_toolkit.completion import CompleteEvent
         from prompt_toolkit.document import Document
-        from deep_research.repl import _command_completer
+        from synapse_deep_research.repl import _command_completer
 
         return list(_command_completer().get_completions(Document(text, len(text)), CompleteEvent()))
 
@@ -383,7 +383,7 @@ class TestCompleter:
 
 class TestRunReplRobustness:
     def test_unbalanced_quote_does_not_crash_the_loop(self, monkeypatch, capsys):
-        from deep_research.repl import run_repl
+        from synapse_deep_research.repl import run_repl
 
         lines = iter(['/fork 1 "unterminated', "/q"])
         monkeypatch.setattr("builtins.input", lambda prompt="": next(lines))
@@ -392,7 +392,7 @@ class TestRunReplRobustness:
         assert "Could not parse" in out and "Goodbye" in out
 
     def test_unknown_command_is_reported_with_a_hint_and_loop_continues(self, monkeypatch, capsys):
-        from deep_research.repl import run_repl
+        from synapse_deep_research.repl import run_repl
 
         lines = iter(["/histroy", "/q"])
         monkeypatch.setattr("builtins.input", lambda prompt="": next(lines))
@@ -407,7 +407,7 @@ class TestPapersAreShownWhenImplied:
     reflecting the explicit /papers setting."""
 
     def _bar(self, state):
-        from deep_research.repl import _status_fragments
+        from synapse_deep_research.repl import _status_fragments
         return "".join(t for _, t in _status_fragments(state))
 
     @pytest.mark.parametrize("template", ["science", "literature"])
@@ -455,7 +455,7 @@ class TestPapersAreShownWhenImplied:
         assert ReplState().academic is None
 
     def test_the_old_name_is_gone(self, capsys):
-        from deep_research.repl import _COMMAND_INDEX
+        from synapse_deep_research.repl import _COMMAND_INDEX
 
         assert "/academic" not in _COMMAND_INDEX
         s = ReplState()
@@ -496,7 +496,7 @@ class TestPapersAreShownWhenImplied:
     def test_the_run_config_follows_the_mode(self, academic, template, depth, expected):
         """What the pipeline will search, after the template is applied the way
         the orchestrator applies it."""
-        from deep_research.pipeline.templates import get_template
+        from synapse_deep_research.pipeline.templates import get_template
 
         config = ReplState(academic=academic, template=template, depth=depth).to_config()
         tmpl = get_template(template) if template else None
@@ -506,9 +506,9 @@ class TestPapersAreShownWhenImplied:
     def test_reason_matches_what_the_pipeline_decides(self):
         """Guard against drift: the display rule is derived from the same
         template flag and depth preset the pipeline reads."""
-        from deep_research.models import ResearchConfig
-        from deep_research.options import academic_reason
-        from deep_research.pipeline.templates import TEMPLATES
+        from synapse_deep_research.models import ResearchConfig
+        from synapse_deep_research.options import academic_reason
+        from synapse_deep_research.pipeline.templates import TEMPLATES
 
         for key, tmpl in TEMPLATES.items():
             assert (academic_reason("standard", key, None) is not None) == tmpl.use_academic, key
@@ -526,7 +526,7 @@ class TestPicker:
         from prompt_toolkit.input import create_pipe_input
         from prompt_toolkit.output import DummyOutput
 
-        from deep_research.repl import pick_option
+        from synapse_deep_research.repl import pick_option
 
         with create_pipe_input() as pipe:
             pipe.send_text(keys)
@@ -557,7 +557,7 @@ class TestPicker:
         assert self._pick("\x1b") is None   # lone Esc
 
     def test_pick_for_command_turns_a_bare_command_into_a_choice(self, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         seen = {}
 
@@ -571,7 +571,7 @@ class TestPicker:
         assert seen == {"title": "Depth", "values": ["quick", "standard", "deep"], "current": "quick"}
 
     def test_papers_picker_says_what_auto_means_right_now(self, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         seen = {}
 
@@ -586,7 +586,7 @@ class TestPicker:
         assert "now on (science template)" in seen["blurbs"]["auto"]
 
     def test_papers_picker_marks_the_current_mode(self, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         seen = {}
         monkeypatch.setattr(
@@ -597,7 +597,7 @@ class TestPicker:
         assert seen["current"] == "off"
 
     def test_template_picker_offers_none_and_marks_it_when_unset(self, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         seen = {}
         monkeypatch.setattr(
@@ -609,7 +609,7 @@ class TestPicker:
         assert "none" in seen["values"] and seen["current"] == "none"
 
     def test_cancelled_picker_returns_none(self, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: None)
         assert repl_mod._pick_for_command("/style", ReplState()) is None
@@ -622,7 +622,7 @@ class TestPicker:
         "just a question",
     ])
     def test_everything_else_passes_through_untouched(self, monkeypatch, line):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         def boom(*a, **k):
             raise AssertionError("picker must not open")
@@ -648,7 +648,7 @@ class TestBoxCommit:
     never accumulates boxes."""
 
     def test_commits_box_rules(self):
-        from deep_research.repl import _commits_box
+        from synapse_deep_research.repl import _commits_box
 
         assert _commits_box("what is CRISPR") is True
         assert _commits_box("  what is CRISPR  ") is True
@@ -661,7 +661,7 @@ class TestBoxCommit:
         from prompt_toolkit.input import create_pipe_input
         from prompt_toolkit.output import DummyOutput
 
-        from deep_research.repl import _BoxedPrompt
+        from synapse_deep_research.repl import _BoxedPrompt
 
         with create_pipe_input() as pipe:
             box = _BoxedPrompt(ReplState(), input=pipe, output=DummyOutput())
@@ -708,14 +708,14 @@ class TestTransientCommands:
 
     @pytest.fixture
     def viewer(self, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         shown = []
         monkeypatch.setattr(repl_mod, "show_view", lambda text, **kw: shown.append(text))
         return shown
 
     def test_successful_setting_prints_and_shows_nothing(self, viewer, capsys):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         s = ReplState()
         assert _run_transient("/depth deep", s) is False
@@ -724,7 +724,7 @@ class TestTransientCommands:
         assert capsys.readouterr().out == ""         # and nothing printed
 
     def test_a_problem_is_shown_in_the_viewer(self, viewer, capsys):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         s = ReplState()
         _run_transient("/depth nope", s)
@@ -733,7 +733,7 @@ class TestTransientCommands:
         assert capsys.readouterr().out == ""         # not leaked to the scrollback
 
     def test_setting_papers_is_silent_even_when_it_overrides_the_template(self, viewer, capsys):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         s = ReplState(template="science")
         _run_transient("/papers off", s)
@@ -741,45 +741,45 @@ class TestTransientCommands:
         assert viewer == [] and capsys.readouterr().out == ""
 
     def test_read_only_screens_always_go_to_the_viewer(self, viewer, capsys):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         _run_transient("/help", ReplState())
         assert len(viewer) == 1 and "Research" in viewer[0] and "/depth" in viewer[0]
         assert capsys.readouterr().out == ""
 
     def test_unknown_command_is_reported_in_the_viewer(self, viewer):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         _run_transient("/histroy", ReplState())
         assert len(viewer) == 1 and "Did you mean /history" in viewer[0]
 
     def test_unparseable_line_is_reported_in_the_viewer(self, viewer):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         _run_transient('/fork 1 "oops', ReplState())
         assert len(viewer) == 1 and "Could not parse" in viewer[0]
 
     def test_quit_still_exits_and_shows_nothing(self, viewer):
-        from deep_research.repl import _run_transient
+        from synapse_deep_research.repl import _run_transient
 
         assert _run_transient("/q", ReplState()) is True
         assert viewer == []
 
     def test_live_commands_print_normally(self, viewer, capsys, monkeypatch):
-        import deep_research.repl as repl_mod
-        from deep_research.repl import Command, _run_transient
+        import synapse_deep_research.repl as repl_mod
+        from synapse_deep_research.repl import Command, _run_transient
 
         def handler(state, args):
             console.print("live output")
 
-        from deep_research.ui import console
+        from synapse_deep_research.ui import console
         monkeypatch.setitem(repl_mod._COMMAND_INDEX, "/livetest", Command("/livetest", handler, "x", display="live"))
         _run_transient("/livetest", ReplState())
         assert "live output" in capsys.readouterr().out
         assert viewer == []
 
     def test_display_modes_by_command(self):
-        from deep_research.repl import _COMMAND_INDEX
+        from synapse_deep_research.repl import _COMMAND_INDEX
 
         for name in ("/depth", "/style", "/template", "/papers", "/agent", "/fresh",
                      "/provider", "/model", "/delete"):
@@ -792,10 +792,10 @@ class TestTransientCommands:
 
 class TestDeleteConfirmation:
     def _store(self, tmp_path, monkeypatch):
-        import deep_research.config as cfg
-        import deep_research.repl as repl_mod
-        import deep_research.storage.db as db_mod
-        from deep_research.models import ResearchReport
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.repl as repl_mod
+        import synapse_deep_research.storage.db as db_mod
+        from synapse_deep_research.models import ResearchReport
 
         db = tmp_path / "research.db"
         monkeypatch.setattr(cfg, "DB_PATH", db)
@@ -805,7 +805,7 @@ class TestDeleteConfirmation:
         return db_mod.save_report(ResearchReport(query="q"), depth="standard"), db_mod
 
     def test_picker_yes_confirms_without_a_typed_prompt(self, tmp_path, monkeypatch, capsys):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         sid, db_mod = self._store(tmp_path, monkeypatch)
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: "yes")
@@ -816,7 +816,7 @@ class TestDeleteConfirmation:
         assert db_mod.load_report(sid) is None
 
     def test_picker_no_or_esc_cancels_and_keeps_the_session(self, tmp_path, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         sid, db_mod = self._store(tmp_path, monkeypatch)
         for answer in ("no", None):
@@ -825,14 +825,14 @@ class TestDeleteConfirmation:
         assert db_mod.load_report(sid) is not None
 
     def test_missing_session_skips_the_picker(self, tmp_path, monkeypatch, capsys):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         self._store(tmp_path, monkeypatch)
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: (_ for _ in ()).throw(AssertionError("picker")))
         assert repl_mod._pick_for_command("/delete 999", ReplState()) == "/delete 999"
 
     def test_typed_confirmation_still_works_outside_a_terminal(self, tmp_path, monkeypatch, capsys):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         sid, db_mod = self._store(tmp_path, monkeypatch)
         monkeypatch.setattr(repl_mod.Confirm, "ask", lambda *a, **k: False)
@@ -848,8 +848,8 @@ class TestModelCommand:
 
     @pytest.fixture
     def cfg(self, monkeypatch):
-        import deep_research.repl as repl_mod
-        from deep_research.config import Settings
+        import synapse_deep_research.repl as repl_mod
+        from synapse_deep_research.config import Settings
 
         custom = Settings(
             llm_provider="zai", zai_api_key="x",
@@ -859,7 +859,7 @@ class TestModelCommand:
         return custom
 
     def test_set_one_stage_and_it_is_saved(self, cfg):
-        from deep_research import userconfig
+        from synapse_deep_research import userconfig
 
         dispatch("/model analyze glm-5.1", ReplState())
         assert userconfig.stage_models("zai") == {"analyze": "glm-5.1"}
@@ -872,7 +872,7 @@ class TestModelCommand:
         assert set(cfg.effective_stage_models().values()) == {"glm-5.2"}
 
     def test_default_returns_a_stage_to_the_recommendation(self, cfg):
-        from deep_research import userconfig
+        from synapse_deep_research import userconfig
 
         dispatch("/model analyze glm-5.2", ReplState())
         dispatch("/model analyze default", ReplState())
@@ -884,7 +884,7 @@ class TestModelCommand:
         assert cfg.effective_stage_models()["gap_analysis"] == "glm-5.2"
 
     def test_a_model_from_another_provider_is_rejected(self, cfg, capsys):
-        from deep_research import userconfig
+        from synapse_deep_research import userconfig
 
         dispatch("/model synthesize kimi-k2.6", ReplState())
         out = capsys.readouterr().out
@@ -902,7 +902,7 @@ class TestModelCommand:
         assert "registry" not in capsys.readouterr().out
 
     def test_unknown_stage_and_missing_model_are_explained(self, cfg, capsys):
-        from deep_research import userconfig
+        from synapse_deep_research import userconfig
 
         dispatch("/model nonsense glm-5.2", ReplState())
         dispatch("/model analyze", ReplState())
@@ -911,8 +911,8 @@ class TestModelCommand:
         assert userconfig.stage_models("zai") == {}
 
     def test_an_invalid_choice_rolls_back_to_what_was_saved(self, cfg, monkeypatch):
-        from deep_research import userconfig
-        from deep_research.capabilities import CapabilityViolation
+        from synapse_deep_research import userconfig
+        from synapse_deep_research.capabilities import CapabilityViolation
 
         dispatch("/model analyze glm-5.2", ReplState())
 
@@ -939,7 +939,7 @@ class TestModelCommand:
         assert "saved" in out and "recommended" in out
 
     def test_interactive_flow_picks_a_stage_then_a_model(self, cfg, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         titles, answers = [], iter(["analyze", "glm-5.2"])
 
@@ -956,28 +956,28 @@ class TestModelCommand:
         assert titles[1][2] == "glm-5.3-flash"      # highlight starts on the stage's current model
 
     def test_the_stage_picker_says_what_each_stage_does(self, cfg):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         rows = dict(repl_mod._model_stage_choices())
         assert "reads each source" in rows["analyze"] and "glm-5.3-flash" in rows["analyze"]
         assert "recommended" in rows["analyze"]
 
     def test_other_lets_the_user_type_a_model_id(self, cfg, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: "other")
         monkeypatch.setattr(repl_mod, "ask_text", lambda *a, **k: "  glm-9.9  ")
         assert repl_mod._pick_for_command("/model analyze", ReplState()) == "/model analyze glm-9.9"
 
     def test_cancelling_the_typed_id_cancels(self, cfg, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: "other")
         monkeypatch.setattr(repl_mod, "ask_text", lambda *a, **k: None)
         assert repl_mod._pick_for_command("/model analyze", ReplState()) is None
 
     def test_interactive_flow_with_the_stage_typed_asks_only_for_the_model(self, cfg, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         calls = []
         monkeypatch.setattr(repl_mod, "pick_option", lambda t, c, cur=None, **k: calls.append(t) or "glm-5.2")
@@ -986,7 +986,7 @@ class TestModelCommand:
 
     @pytest.mark.parametrize("cancel_at", [0, 1])
     def test_cancelling_either_step_cancels(self, cfg, monkeypatch, cancel_at):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         answers = iter(["analyze", "glm-5.2"])
         step = {"n": 0}
@@ -999,7 +999,7 @@ class TestModelCommand:
         assert repl_mod._pick_for_command("/model", ReplState()) is None
 
     def test_a_fully_typed_line_skips_the_pickers(self, cfg, monkeypatch):
-        import deep_research.repl as repl_mod
+        import synapse_deep_research.repl as repl_mod
 
         monkeypatch.setattr(repl_mod, "pick_option", lambda *a, **k: (_ for _ in ()).throw(AssertionError("picker")))
         assert repl_mod._pick_for_command("/model analyze glm-5.2", ReplState()) == "/model analyze glm-5.2"
@@ -1007,7 +1007,7 @@ class TestModelCommand:
     def test_completion_walks_stage_then_model(self, cfg):
         from prompt_toolkit.completion import CompleteEvent
         from prompt_toolkit.document import Document
-        from deep_research.repl import _command_completer
+        from synapse_deep_research.repl import _command_completer
 
         def complete(text):
             return [c.text for c in _command_completer().get_completions(Document(text, len(text)), CompleteEvent())]

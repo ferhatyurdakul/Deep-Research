@@ -46,8 +46,8 @@ _CRED_FIELDS = ("zai_api_key", "opencode_api_key", "tavily_api_key", "semantic_s
 def _install_fake_keyring(monkeypatch):
     """Point credentials at an in-memory keyring, and make sure the process-wide
     settings are put back afterwards."""
-    from deep_research import credentials
-    from deep_research.config import settings
+    from synapse_deep_research import credentials
+    from synapse_deep_research.config import settings
 
     fake = _FakeKeyring()
     monkeypatch.setattr(credentials, "_backend", lambda: fake)
@@ -74,8 +74,8 @@ def test_logout_does_not_leak_into_global_settings():
 
     Uses its own MonkeyPatch and undoes it explicitly, so the check doesn't
     depend on the order pytest tears fixtures down in."""
-    from deep_research.config import settings
-    from deep_research.setup_wizard import run_logout
+    from synapse_deep_research.config import settings
+    from synapse_deep_research.setup_wizard import run_logout
 
     originals = {f: getattr(settings, f) for f in _CRED_FIELDS}
     for f in _CRED_FIELDS:
@@ -83,7 +83,7 @@ def test_logout_does_not_leak_into_global_settings():
     mp = pytest.MonkeyPatch()
     try:
         _install_fake_keyring(mp)
-        with patch("deep_research.setup_wizard.Confirm.ask", return_value=True):
+        with patch("synapse_deep_research.setup_wizard.Confirm.ask", return_value=True):
             run_logout("all")
         mp.undo()  # what the fake_keyring fixture's teardown does
         after = {f: getattr(settings, f) for f in _CRED_FIELDS}
@@ -98,34 +98,34 @@ def test_logout_does_not_leak_into_global_settings():
 
 class TestGetSetDelete:
     def test_set_and_get_round_trip(self, fake_keyring):
-        from deep_research.credentials import get_credential, set_credential
+        from synapse_deep_research.credentials import get_credential, set_credential
         set_credential("ZAI_API_KEY", "sk-abc")
         assert get_credential("ZAI_API_KEY") == "sk-abc"
 
     def test_get_missing_returns_none(self, fake_keyring):
-        from deep_research.credentials import get_credential
+        from synapse_deep_research.credentials import get_credential
         assert get_credential("MISSING_KEY") is None
 
     def test_set_empty_rejected(self, fake_keyring):
-        from deep_research.credentials import set_credential
+        from synapse_deep_research.credentials import set_credential
         with pytest.raises(ValueError):
             set_credential("ZAI_API_KEY", "")
 
     def test_delete_returns_true_when_present(self, fake_keyring):
-        from deep_research.credentials import delete_credential, set_credential
+        from synapse_deep_research.credentials import delete_credential, set_credential
         set_credential("TAVILY_API_KEY", "tav-x")
         assert delete_credential("TAVILY_API_KEY") is True
         assert delete_credential("TAVILY_API_KEY") is False  # second call: no-op
 
     def test_delete_returns_false_when_absent(self, fake_keyring):
-        from deep_research.credentials import delete_credential
+        from synapse_deep_research.credentials import delete_credential
         assert delete_credential("NEVER_STORED") is False
 
 
 class TestListCredentials:
     def test_lists_all_managed_keys_with_presence_only(self, fake_keyring):
         # Never leak values — only presence.
-        from deep_research.credentials import (
+        from synapse_deep_research.credentials import (
             MANAGED_KEY_NAMES,
             list_credentials,
             set_credential,
@@ -145,10 +145,10 @@ class TestSettingsKeyringFallback:
         # the config module is imported), so monkeypatching env after that
         # doesn't change the defaults. To simulate "no env value", we pass
         # empty strings explicitly — that's what model_post_init reacts to.
-        from deep_research.credentials import set_credential
+        from synapse_deep_research.credentials import set_credential
         set_credential("ZAI_API_KEY", "key-from-keyring")
 
-        from deep_research.config import Settings
+        from synapse_deep_research.config import Settings
         s = Settings(
             zai_api_key="", opencode_api_key="",
             tavily_api_key="", semantic_scholar_api_key="",
@@ -158,10 +158,10 @@ class TestSettingsKeyringFallback:
         assert s.opencode_api_key == ""
 
     def test_explicit_constructor_value_wins_over_keyring(self, fake_keyring):
-        from deep_research.credentials import set_credential
+        from synapse_deep_research.credentials import set_credential
         set_credential("ZAI_API_KEY", "from-keyring")
 
-        from deep_research.config import Settings
+        from synapse_deep_research.config import Settings
         s = Settings(zai_api_key="from-constructor")
         assert s.zai_api_key == "from-constructor"
 
@@ -170,8 +170,8 @@ class TestSettingsKeyringFallback:
         # decide to keep the env-sourced value. Then start with an empty
         # field, set keyring later, reload, observe the update.
         monkeypatch.delenv("ZAI_API_KEY", raising=False)
-        from deep_research.config import Settings
-        from deep_research.credentials import set_credential
+        from synapse_deep_research.config import Settings
+        from synapse_deep_research.credentials import set_credential
         s = Settings(zai_api_key="")
         assert s.zai_api_key == ""
 
@@ -183,8 +183,8 @@ class TestSettingsKeyringFallback:
         # If ZAI_API_KEY is in the live environment, reload_credentials
         # must not blow it away even when keyring has a different value.
         monkeypatch.setenv("ZAI_API_KEY", "from-env")
-        from deep_research.config import Settings
-        from deep_research.credentials import set_credential
+        from synapse_deep_research.config import Settings
+        from synapse_deep_research.credentials import set_credential
         s = Settings(zai_api_key="from-env")
         set_credential("ZAI_API_KEY", "from-keyring")
         s.reload_credentials()
@@ -195,35 +195,35 @@ class TestSetupWizardSubcommands:
     """High-level: the wizard calls credentials.set_credential and propagates errors."""
 
     def test_run_login_with_unknown_key_prints_error(self, fake_keyring, capsys):
-        from deep_research.setup_wizard import run_login
+        from synapse_deep_research.setup_wizard import run_login
         run_login("MADE_UP_KEY")
         # Should warn rather than store
-        from deep_research.credentials import get_credential
+        from synapse_deep_research.credentials import get_credential
         assert get_credential("MADE_UP_KEY") is None
 
     def test_run_logout_all_clears_everything(self, fake_keyring):
-        from deep_research.credentials import (
+        from synapse_deep_research.credentials import (
             list_credentials,
             set_credential,
         )
-        from deep_research.setup_wizard import run_logout
+        from synapse_deep_research.setup_wizard import run_logout
 
         set_credential("ZAI_API_KEY", "a")
         set_credential("TAVILY_API_KEY", "b")
 
         # Bypass the Confirm prompt by patching it to return True.
-        with patch("deep_research.setup_wizard.Confirm.ask", return_value=True):
+        with patch("synapse_deep_research.setup_wizard.Confirm.ask", return_value=True):
             run_logout("all")
 
         result = list_credentials()
         assert not any(result.values())
 
     def test_run_logout_specific_key(self, fake_keyring):
-        from deep_research.credentials import (
+        from synapse_deep_research.credentials import (
             get_credential,
             set_credential,
         )
-        from deep_research.setup_wizard import run_logout
+        from synapse_deep_research.setup_wizard import run_logout
 
         set_credential("ZAI_API_KEY", "a")
         set_credential("TAVILY_API_KEY", "b")
@@ -234,8 +234,8 @@ class TestSetupWizardSubcommands:
 
 class TestLogoutDefault:
     def test_bare_logout_clears_only_active_provider_key(self, fake_keyring, monkeypatch):
-        from deep_research import credentials, setup_wizard
-        from deep_research.config import settings
+        from synapse_deep_research import credentials, setup_wizard
+        from synapse_deep_research.config import settings
 
         credentials.set_credential("ZAI_API_KEY", "z-secret")
         credentials.set_credential("TAVILY_API_KEY", "t-secret")
@@ -249,7 +249,7 @@ class TestLogoutDefault:
     def test_logout_all_clears_everything(self, fake_keyring, monkeypatch):
         from types import SimpleNamespace
 
-        from deep_research import credentials, setup_wizard
+        from synapse_deep_research import credentials, setup_wizard
 
         credentials.set_credential("ZAI_API_KEY", "z")
         credentials.set_credential("TAVILY_API_KEY", "t")

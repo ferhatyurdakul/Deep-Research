@@ -18,9 +18,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research import llm
-from deep_research.capabilities import thinking_dialect
-from deep_research.llm import (
+from synapse_deep_research import llm
+from synapse_deep_research.capabilities import thinking_dialect
+from synapse_deep_research.llm import (
     UpstreamRequestError,
     _apply_thinking,
     _build_anthropic_kwargs,
@@ -69,7 +69,7 @@ class TestApplyThinking:
         # Reasoning-native model: don't ship Z.AI-shaped fields.
         route = self._route("opencode-go", "kimi-k2.6", "openai")
         kwargs = {"model": "kimi-k2.6"}
-        with caplog.at_level(logging.INFO, logger="deep_research.llm"):
+        with caplog.at_level(logging.INFO, logger="synapse_deep_research.llm"):
             _apply_thinking(kwargs, route)
         assert "extra_body" not in kwargs
         assert "thinking" not in kwargs
@@ -104,7 +104,7 @@ class TestApplyThinking:
         # Hand-crafted invalid combo: zai-extra-body shape on anthropic family.
         route = _Route("opencode-go", "minimax-m2.7", "anthropic", True, "zai-extra-body")
         kwargs = {}
-        with caplog.at_level(logging.WARNING, logger="deep_research.llm"):
+        with caplog.at_level(logging.WARNING, logger="synapse_deep_research.llm"):
             _apply_thinking(kwargs, route)
         assert kwargs == {}
         assert any("not compatible" in r.message for r in caplog.records)

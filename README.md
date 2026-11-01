@@ -1,4 +1,4 @@
-# Deep Research
+# Synapse Deep Research
 
 AI research agent that iteratively searches, analyzes, and synthesizes comprehensive reports with evidence-backed citations from web sources and research papers.
 
@@ -9,7 +9,7 @@ Built on [Z.AI](https://z.ai) GLM and [OpenCode Go](https://opencode.ai/go) mode
 Give it a question. It breaks it into sub-questions, searches the web and paper databases (arXiv, Semantic Scholar) in parallel, reads and analyzes each source, identifies what's missing, searches again, and produces a structured report with inline citations traced back to specific sources.
 
 ```
-deep-research "What are the latest advances in LLM reasoning?"
+synapse-deep-research "What are the latest advances in LLM reasoning?"
 ```
 
 ```
@@ -35,7 +35,7 @@ That's it. Web search works out of the box with DuckDuckGo (free, no key needed)
 
 ### Install
 
-**Recommended: pipx** — installs `deep-research` on your global PATH so you can run it from any directory without activating a venv.
+**Recommended: pipx** — installs `synapse-deep-research` on your global PATH so you can run it from any directory without activating a venv.
 
 ```bash
 pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
@@ -51,12 +51,21 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-### Configure
-
-The recommended way is the setup screen. It opens by itself the first time you launch `deep-research` in a terminal with no API key, and any time with `deep-research setup` (or `/setup` inside the app):
+**Coming from `deep-research`?** The tool was renamed. Install the new one and remove the old:
 
 ```bash
-deep-research setup
+pipx uninstall deep-research
+pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
+```
+
+The first launch copies your settings, session history and stored API keys from the old install, and leaves the old copies where they were (macOS may ask once to let the new install read the old Keychain entries). Scripts need the new names: the `deep-research` command is now `synapse-deep-research`, and `DEEP_RESEARCH_*` variables are now `SYNAPSE_DEEP_RESEARCH_*`.
+
+### Configure
+
+The recommended way is the setup screen. It opens by itself the first time you launch `synapse-deep-research` in a terminal with no API key, and any time with `synapse-deep-research setup` (or `/setup` inside the app):
+
+```bash
+synapse-deep-research setup
 ```
 
 It walks you through five steps — each one a small picker or prompt that disappears as you go:
@@ -76,101 +85,101 @@ Esc skips setup at any step (the app then starts normally and tells you how to c
 Other credential management commands:
 
 ```bash
-deep-research keys                  # show which keys are stored (never prints values)
-deep-research login                 # set just the active provider's API key
-deep-research login TAVILY_API_KEY  # set a specific key
-deep-research logout                # clear the active provider's key
-deep-research logout all            # clear every stored credential
+synapse-deep-research keys                  # show which keys are stored (never prints values)
+synapse-deep-research login                 # set just the active provider's API key
+synapse-deep-research login TAVILY_API_KEY  # set a specific key
+synapse-deep-research logout                # clear the active provider's key
+synapse-deep-research logout all            # clear every stored credential
 ```
 
 Inside the REPL, the same commands are available as slash commands: `/setup`, `/login`, `/logout`, `/keys`.
 
-**File-based config still works** — handy for CI, scripted overrides, or air-gapped boxes. Either set environment variables directly (`export ZAI_API_KEY=…`), or put them in `./.env` (per-project, wins when present) or `~/.config/deep-research/.env` (global fallback). The resolution order is: **env var > project `.env` > global `.env` > OS keyring**.
+**File-based config still works** — handy for CI, scripted overrides, or air-gapped boxes. Either set environment variables directly (`export ZAI_API_KEY=…`), or put them in `./.env` (per-project, wins when present) or `~/.config/synapse-deep-research/.env` (global fallback). The resolution order is: **env var > project `.env` > global `.env` > OS keyring**.
 
-**Diagnostics.** The CLI shows warnings and errors only (retries, failed fetches, rate limits). Set `DEEP_RESEARCH_LOG_LEVEL=INFO` — or `DEBUG` — to also see the per-call route details and result counts. Colors follow `NO_COLOR` and are dropped automatically when output is piped.
+**Diagnostics.** The CLI shows warnings and errors only (retries, failed fetches, rate limits). Set `SYNAPSE_DEEP_RESEARCH_LOG_LEVEL=INFO` — or `DEBUG` — to also see the per-call route details and result counts. Colors follow `NO_COLOR` and are dropped automatically when output is piped.
 
 ### Where files live
 
 | Path | Override env var | Purpose |
 |------|------------------|---------|
-| `~/.local/share/deep-research/research.db` | `DEEP_RESEARCH_DATA_DIR` | SQLite session store (XDG_DATA_HOME respected) |
-| `<cwd>/outputs/` | `DEEP_RESEARCH_OUTPUTS_DIR` | Markdown reports — created lazily where you run from |
-| `~/.config/deep-research/config.json` | `DEEP_RESEARCH_CONFIG_FILE` | Your provider and the model for each stage (no secrets) |
-| `~/.config/deep-research/.env` | `XDG_CONFIG_HOME` respected | Global credentials fallback |
-| `~/.config/deep-research/repl_history` | — | REPL command history |
+| `~/.local/share/synapse-deep-research/research.db` | `SYNAPSE_DEEP_RESEARCH_DATA_DIR` | SQLite session store (XDG_DATA_HOME respected) |
+| `<cwd>/outputs/` | `SYNAPSE_DEEP_RESEARCH_OUTPUTS_DIR` | Markdown reports — created lazily where you run from |
+| `~/.config/synapse-deep-research/config.json` | `SYNAPSE_DEEP_RESEARCH_CONFIG_FILE` | Your provider and the model for each stage (no secrets) |
+| `~/.config/synapse-deep-research/.env` | `XDG_CONFIG_HOME` respected | Global credentials fallback |
+| `~/.config/synapse-deep-research/repl_history` | — | REPL command history |
 
 ### Run
 
 ```bash
 # Interactive REPL (slash commands + persistent settings)
-deep-research
+synapse-deep-research
 
 # One-shot query
-deep-research "your research question"
+synapse-deep-research "your research question"
 ```
 
-The bare `deep-research` command launches an interactive prompt where you can type questions directly or use slash commands like `/depth deep`, `/template science`, `/agent`, `/history`, `/continue 3`. See **Interactive Mode** below for the full command list.
+The bare `synapse-deep-research` command launches an interactive prompt where you can type questions directly or use slash commands like `/depth deep`, `/template science`, `/agent`, `/history`, `/continue 3`. See **Interactive Mode** below for the full command list.
 
-Everything is discoverable from the terminal: `deep-research --help` lists every option (with what each value means) and every command, `deep-research COMMAND --help` details one command, and `deep-research status` shows the provider, the model each stage uses, credentials and file locations.
+Everything is discoverable from the terminal: `synapse-deep-research --help` lists every option (with what each value means) and every command, `synapse-deep-research COMMAND --help` details one command, and `synapse-deep-research status` shows the provider, the model each stage uses, credentials and file locations.
 
 ## CLI Reference
 
 ```bash
 # Interactive prompt (asks for the query)
-deep-research
+synapse-deep-research
 
 # Direct query
-deep-research "your research question"
+synapse-deep-research "your research question"
 ```
 
 ### Flags
 
 ```bash
 # Depth presets
-deep-research --depth quick "topic"             # 1 pass, fast
-deep-research --depth standard "topic"          # 2 passes, balanced (default)
-deep-research --depth deep "topic"              # 3 passes, thorough, research papers
+synapse-deep-research --depth quick "topic"             # 1 pass, fast
+synapse-deep-research --depth standard "topic"          # 2 passes, balanced (default)
+synapse-deep-research --depth deep "topic"              # 3 passes, thorough, research papers
 
 # Report style
-deep-research --style brief "topic"             # ~500-1000 words, summary + key findings
-deep-research --style standard "topic"          # ~2000-4000 words, themed sections (default)
-deep-research --style academic "topic"          # ~3000-5000 words, numbered sections + abstract + methodology
+synapse-deep-research --style brief "topic"             # ~500-1000 words, summary + key findings
+synapse-deep-research --style standard "topic"          # ~2000-4000 words, themed sections (default)
+synapse-deep-research --style academic "topic"          # ~3000-5000 words, numbered sections + abstract + methodology
 
 # Pipeline features
-deep-research --agent "topic"                   # autonomous agent mode (decides when to stop)
-deep-research --papers "topic"                  # always include arXiv + Semantic Scholar
-deep-research --depth deep --no-papers "topic"  # web only, even on deep
-deep-research --template science "topic"        # domain-specific strategy
-deep-research --fresh "topic"                   # ignore URLs already analyzed in past sessions
+synapse-deep-research --agent "topic"                   # autonomous agent mode (decides when to stop)
+synapse-deep-research --papers "topic"                  # always include arXiv + Semantic Scholar
+synapse-deep-research --depth deep --no-papers "topic"  # web only, even on deep
+synapse-deep-research --template science "topic"        # domain-specific strategy
+synapse-deep-research --fresh "topic"                   # ignore URLs already analyzed in past sessions
 
 # Combine flags freely
-deep-research --agent --template science --style academic --depth deep "topic"
+synapse-deep-research --agent --template science --style academic --depth deep "topic"
 
 # Session management (subcommands)
-deep-research history                           # list past sessions (-n N for more)
-deep-research continue 3                        # deepen a previous session
-deep-research continue 3 --depth deep           # deepen with a deeper shape
-deep-research fork 3                            # copy session 3 into a new session (original untouched)
-deep-research fork 3 "narrower angle on X"      # fork with a different query
-deep-research resynthesize 3                    # re-run only synthesis on session 3's sources, save as fork
-deep-research resynthesize 3 --style academic   # same, but with a different report style
-deep-research inspect 3                         # show metadata, sub-questions, sources, iterations, summary
-deep-research inspect 3 --full                  # also print the full detailed findings
-deep-research inspect 3 --source 5              # deep dive on source #5 (findings + evidence quotes)
-deep-research delete 5                          # remove a session (confirms on a terminal)
+synapse-deep-research history                           # list past sessions (-n N for more)
+synapse-deep-research continue 3                        # deepen a previous session
+synapse-deep-research continue 3 --depth deep           # deepen with a deeper shape
+synapse-deep-research fork 3                            # copy session 3 into a new session (original untouched)
+synapse-deep-research fork 3 "narrower angle on X"      # fork with a different query
+synapse-deep-research resynthesize 3                    # re-run only synthesis on session 3's sources, save as fork
+synapse-deep-research resynthesize 3 --style academic   # same, but with a different report style
+synapse-deep-research inspect 3                         # show metadata, sub-questions, sources, iterations, summary
+synapse-deep-research inspect 3 --full                  # also print the full detailed findings
+synapse-deep-research inspect 3 --source 5              # deep dive on source #5 (findings + evidence quotes)
+synapse-deep-research delete 5                          # remove a session (confirms on a terminal)
 ```
 
-Credential subcommands: `deep-research setup`, `login [KEY]`, `logout [KEY|all]`, `keys`.
-System subcommands: `deep-research status` (provider, the model for each stage and where it comes from, credentials, file paths), `migrate [PATH]`, `help [COMMAND]`.
+Credential subcommands: `synapse-deep-research setup`, `login [KEY]`, `logout [KEY|all]`, `keys`.
+System subcommands: `synapse-deep-research status` (provider, the model for each stage and where it comes from, credentials, file paths), `migrate [PATH]`, `help [COMMAND]`.
 `continue` and `resynthesize` accept the same shape flags as one-shot runs (`--depth`, `--papers`, `--template`, `--style`, `--fresh`).
 
 ### Getting help
 
 ```bash
-deep-research --help               # all options (with value meanings), commands, examples
-deep-research continue --help      # one command: usage, arguments, options, examples
-deep-research help continue        # same, as a command
-deep-research --version
+synapse-deep-research --help               # all options (with value meanings), commands, examples
+synapse-deep-research continue --help      # one command: usage, arguments, options, examples
+synapse-deep-research help continue        # same, as a command
+synapse-deep-research --version
 ```
 
 Help is generated from the same command registry and parsers the CLI runs on, so it can't drift from what is actually accepted. Usage mistakes print the error, the command's usage line and a pointer to `--help` (exit code 2).
@@ -236,7 +245,7 @@ The agent's iteration budget is independent of the fixed-loop count and scales w
 
 ## Interactive Mode
 
-Run `deep-research` with no arguments to drop into the REPL:
+Run `synapse-deep-research` with no arguments to drop into the REPL:
 
 ```
 > /depth deep
@@ -252,7 +261,7 @@ Run `deep-research` with no arguments to drop into the REPL:
 > /quit
 ```
 
-Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`papers`, `agent`, `fresh`), provider — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
+Anything not starting with `/` runs as a research query using the current settings. The input is a Claude-Code-style rounded box whose top border carries the run state — depth, template, non-default style, active toggles (`papers`, `agent`, `fresh`), provider — colored and refreshed on every prompt; an empty box shows a hint. Type `/` and a completion menu opens *below* the box with each command's usage and description (Tab/arrows to pick and scroll, keep typing to filter fuzzily); after `/depth ` the menu offers that command's values with what each means. Plain queries never trigger it. History persists in `~/.config/synapse-deep-research/repl_history` (↑/↓ to navigate, Ctrl-R to search, first Ctrl-C clears the line).
 
 Seeing your options:
 
@@ -287,7 +296,7 @@ Seeing your options:
 | `/help [command]` | Show the command list, or explain one command |
 | `/quit` (`/exit`, `/q`) | Exit the REPL |
 
-One-shot CLI flags still work: `deep-research "topic"`, `deep-research --depth deep "topic"`, `deep-research history`, `deep-research inspect 3`, etc. — see the flag reference above.
+One-shot CLI flags still work: `synapse-deep-research "topic"`, `synapse-deep-research --depth deep "topic"`, `synapse-deep-research history`, `synapse-deep-research inspect 3`, etc. — see the flag reference above.
 
 ## Multi-Model Routing
 
@@ -306,7 +315,7 @@ A cheap, fast model on the easy or high-volume stages and a strong one where qua
 
 - `/model` + Enter — pick a stage (or `all`), then a model. The first list says what each stage does and which model it uses now; the second lists the provider's models with what is known about each, the recommended one tagged. `other` lets you type any model ID, and `default` returns a stage to the recommendation.
 - Or type it: `/model analyze glm-5.3-flash`, `/model all glm-5.3`, `/model synthesize default`.
-- `/status` (or `deep-research status`) shows what each stage uses and whether that is **saved**, **recommended** (you never chose), or **from your environment**.
+- `/status` (or `synapse-deep-research status`) shows what each stage uses and whether that is **saved**, **recommended** (you never chose), or **from your environment**.
 
 **Recommended models**, used until you choose (and pre-selected in setup):
 
@@ -388,7 +397,7 @@ source — cap it there rather than throttling your editor.
 ## Project Structure
 
 ```
-src/deep_research/
+src/synapse_deep_research/
   main.py                  CLI entrypoint + command dispatch
   cli_help.py              Command registry, rich --help, styled usage errors
   options.py               Option values + what they mean (shared by help and REPL)

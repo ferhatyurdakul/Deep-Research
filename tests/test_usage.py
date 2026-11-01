@@ -16,9 +16,9 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research import llm
-from deep_research.llm import ProviderLimitExceeded
-from deep_research.usage import UsageTracker, get_tracker, new_run_tracker, stage
+from synapse_deep_research import llm
+from synapse_deep_research.llm import ProviderLimitExceeded
+from synapse_deep_research.usage import UsageTracker, get_tracker, new_run_tracker, stage
 
 
 class TestUsageTracker:
@@ -71,7 +71,7 @@ class TestStageContextTagsRecording:
 
         async def fake_call():
             # Simulate llm._chat_inner recording a call: it reads current_stage()
-            from deep_research.usage import current_stage
+            from synapse_deep_research.usage import current_stage
             t.record_call("opencode-go", "glm-5.1", current_stage())
 
         async def main():

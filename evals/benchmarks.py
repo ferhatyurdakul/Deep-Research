@@ -1,4 +1,4 @@
-"""Benchmark query set for Deep Research evaluation.
+"""Benchmark query set for Synapse Deep Research evaluation.
 
 Each entry has:
   id       — stable slug used for output directories

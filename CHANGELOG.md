@@ -3,6 +3,14 @@
 
 ## Unreleased
 
+### Breaking — renamed to Synapse Deep Research
+
+- **The tool is now Synapse Deep Research.** The package and the command are `synapse-deep-research` (was `deep-research`) and the Python module is `synapse_deep_research`. The old command is gone, not kept as an alias: `pipx uninstall deep-research`, then install the new name.
+- **Your data is carried over on first launch.** Settings, the global `.env`, REPL history, the session database and the API keys stored under the old keyring service are copied to the new locations. Nothing is moved or deleted, so the old install keeps working until you remove it, and nothing already present under the new name is overwritten. It runs once, and not at all when `SYNAPSE_DEEP_RESEARCH_CONFIG_FILE` or `SYNAPSE_DEEP_RESEARCH_DATA_DIR` redirect where state lives.
+- **New locations:** `~/.config/synapse-deep-research/` (settings, `.env`, REPL history), `~/.local/share/synapse-deep-research/` (sessions), and the keyring service `synapse-deep-research`. The old `deep-research` folders and keyring entries are left alone; delete them when you are done with them.
+- **Environment variables:** `DEEP_RESEARCH_DATA_DIR`, `DEEP_RESEARCH_OUTPUTS_DIR`, `DEEP_RESEARCH_CONFIG_FILE` and `DEEP_RESEARCH_LOG_LEVEL` are now `SYNAPSE_DEEP_RESEARCH_DATA_DIR`, `SYNAPSE_DEEP_RESEARCH_OUTPUTS_DIR`, `SYNAPSE_DEEP_RESEARCH_CONFIG_FILE` and `SYNAPSE_DEEP_RESEARCH_LOG_LEVEL`. The old names are no longer read. The prefix is spelled out in full so it can't be mistaken for another tool called Synapse. Provider variables (`LLM_PROVIDER`, `ZAI_API_KEY`, `MODEL_*` and so on) are unchanged.
+- Saved sessions, their `--style academic` and every command-line option are unaffected.
+
 ### Breaking — models are chosen per stage; route profiles are gone
 
 - **`LLM_ROUTE` and `/route` are removed**, along with the `balanced` / `budget` / `quality` presets. You now choose the model for each pipeline stage (decompose, analyze, gap_analysis, synthesize) yourself — in the new setup screen, or any time with `/model` — and the choice is saved to `~/.config/deep-research/config.json` (`DEEP_RESEARCH_CONFIG_FILE` overrides the path). Per stage the model comes from, in order: a `MODEL_<STAGE>` environment variable, what you saved, then the provider's recommendation (Z.AI: `glm-5.3-flash` for decompose/analyze, `glm-5.3` for gap_analysis/synthesize; OpenCode Go: `glm-5.1` everywhere). A leftover `LLM_ROUTE` is ignored with a one-time warning. `deep-research status` and `/status` show where each stage's model comes from. The Python API changes accordingly: `RECOMMENDED_ROUTES`, `known_profiles`, `resolve_stage_route` and `Settings.llm_route` are replaced by `recommended_stage_models()` and `Settings.stage_sources()`.

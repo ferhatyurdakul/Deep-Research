@@ -21,16 +21,16 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research import capabilities, userconfig
-from deep_research.capabilities import (
+from synapse_deep_research import capabilities, userconfig
+from synapse_deep_research.capabilities import (
     PIPELINE_STAGES,
     CapabilityViolation,
     listed_models,
     lookup,
     recommended_stage_models,
 )
-from deep_research.config import Settings
-from deep_research.models import ResearchConfig, ResearchDepth
+from synapse_deep_research.config import Settings
+from synapse_deep_research.models import ResearchConfig, ResearchDepth
 
 
 def _zai(**kw) -> Settings:
@@ -148,13 +148,13 @@ class TestUserConfig:
         assert json.loads(userconfig.config_file().read_text())["version"] == userconfig.VERSION
 
     def test_path_follows_xdg_unless_overridden(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("DEEP_RESEARCH_CONFIG_FILE")
+        monkeypatch.delenv("SYNAPSE_DEEP_RESEARCH_CONFIG_FILE")
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert userconfig.config_file() == tmp_path / "xdg" / "deep-research" / "config.json"
+        assert userconfig.config_file() == tmp_path / "xdg" / "synapse-deep-research" / "config.json"
 
     def test_saved_provider_becomes_the_default_provider(self, monkeypatch):
         """Environment wins, then the provider chosen in setup, then Z.AI."""
-        import deep_research.config as cfg
+        import synapse_deep_research.config as cfg
 
         monkeypatch.delenv("LLM_PROVIDER", raising=False)
         userconfig.save_choices("opencode-go", {})
@@ -237,7 +237,7 @@ class TestValidateRoutes:
 
 class TestPipelineRouter:
     def _router(self, settings_obj, depth=ResearchDepth.STANDARD):
-        from deep_research import config as cfg_module
+        from synapse_deep_research import config as cfg_module
 
         with patch.object(cfg_module, "settings", settings_obj):
             rc = ResearchConfig(depth=depth)
@@ -259,8 +259,8 @@ class TestPipelineRouter:
 
 # --- live account model list -------------------------------------------------
 
-from deep_research import options as _options  # noqa: E402
-from deep_research.options import fetch_account_models as real_fetch_account_models  # noqa: E402  (conftest stubs the module attribute)
+from synapse_deep_research import options as _options  # noqa: E402
+from synapse_deep_research.options import fetch_account_models as real_fetch_account_models  # noqa: E402  (conftest stubs the module attribute)
 
 
 class TestAccountModels:
@@ -304,7 +304,7 @@ class TestAccountModels:
         assert timeout and timeout <= 10                      # never hangs setup
 
     def test_uses_the_configured_key_when_none_is_passed(self, http, monkeypatch):
-        from deep_research.config import settings
+        from synapse_deep_research.config import settings
         monkeypatch.setattr(settings, "zai_api_key", "sk-from-settings")
         real_fetch_account_models("zai")
         assert http.calls[0][1] == {"Authorization": "Bearer sk-from-settings"}
@@ -345,7 +345,7 @@ class TestAccountModels:
         assert real_fetch_account_models("zai", api_key="sk-k") == ["glm-5.3", "glm-5.3-flash"]
 
     def test_no_key_or_unknown_provider_makes_no_request(self, http, monkeypatch):
-        from deep_research.config import settings
+        from synapse_deep_research.config import settings
 
         monkeypatch.setattr(settings, "zai_api_key", "")
         assert real_fetch_account_models("zai") is None
@@ -383,7 +383,7 @@ class TestModelChoicesWithAccount:
 
 class TestAccountModelsInThePickers:
     def test_setup_offers_the_account_models_in_the_per_stage_picker(self, monkeypatch):
-        import deep_research.onboarding as onboarding
+        import synapse_deep_research.onboarding as onboarding
 
         seen = []
         monkeypatch.setattr(_options, "fetch_account_models", lambda provider, api_key=None, **k: ["glm-5.3", "glm-4.7"])
@@ -394,8 +394,8 @@ class TestAccountModelsInThePickers:
         assert dict(seen[0])["glm-5.2"].startswith("not on your account")
 
     def test_model_command_offers_them_too(self, monkeypatch):
-        import deep_research.repl as repl_mod
-        from deep_research.config import Settings
+        import synapse_deep_research.repl as repl_mod
+        from synapse_deep_research.config import Settings
 
         monkeypatch.setattr(repl_mod, "settings", Settings(llm_provider="zai", zai_api_key="x"))
         monkeypatch.setattr(_options, "fetch_account_models", lambda *a, **k: ["glm-5.3", "glm-4.7"])
@@ -406,8 +406,8 @@ class TestAccountModelsInThePickers:
         assert "glm-4.7" in [v for v, _ in seen[1]]
 
     def test_a_failed_lookup_falls_back_to_the_built_in_list(self, monkeypatch):
-        import deep_research.repl as repl_mod
-        from deep_research.config import Settings
+        import synapse_deep_research.repl as repl_mod
+        from synapse_deep_research.config import Settings
 
         monkeypatch.setattr(repl_mod, "settings", Settings(llm_provider="zai", zai_api_key="x"))
 

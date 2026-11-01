@@ -1,5 +1,5 @@
 [project]
-name = "deep-research"
+name = "synapse-deep-research"
 version = "0.4.0"
 description = "AI-powered deep research CLI using Z.AI GLM and OpenCode Go models"
 requires-python = ">=3.9"
@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-deep-research = "deep_research.main:main"
+synapse-deep-research = "synapse_deep_research.entry:run"
 
 [build-system]
 requires = ["setuptools>=68.0"]

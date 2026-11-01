@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research.capabilities import (
+from synapse_deep_research.capabilities import (
     CapabilityViolation,
     describe_route,
     known_models,
@@ -18,7 +18,7 @@ from deep_research.capabilities import (
     resolve_thinking,
     validate_route,
 )
-from deep_research.config import Settings
+from synapse_deep_research.config import Settings
 
 
 class TestRegistry:
@@ -72,7 +72,7 @@ class TestResolveEndpointFamily:
         assert resolve_endpoint_family("opencode-go", "minimax-m2.7", None) == "anthropic"
 
     def test_unknown_model_falls_back_with_warning(self, caplog):
-        with caplog.at_level(logging.WARNING, logger="deep_research.capabilities"):
+        with caplog.at_level(logging.WARNING, logger="synapse_deep_research.capabilities"):
             family = resolve_endpoint_family("opencode-go", "future-model", None)
         assert family == "openai"
         assert any("not in capability registry" in r.message for r in caplog.records)
@@ -93,7 +93,7 @@ class TestValidateRoute:
             validate_route("opencode-go", "glm-5.1", "telepathy")
 
     def test_unknown_model_warns_but_returns_none(self, caplog):
-        with caplog.at_level(logging.WARNING, logger="deep_research.capabilities"):
+        with caplog.at_level(logging.WARNING, logger="synapse_deep_research.capabilities"):
             assert validate_route("opencode-go", "future-model", "openai") is None
         assert any("not registered" in r.message for r in caplog.records)
 
@@ -110,7 +110,7 @@ class TestResolveThinking:
         assert resolve_thinking("opencode-go", "glm-5.1", True) is True
 
     def test_unsupported_drops_with_warning(self, caplog):
-        with caplog.at_level(logging.WARNING, logger="deep_research.capabilities"):
+        with caplog.at_level(logging.WARNING, logger="synapse_deep_research.capabilities"):
             result = resolve_thinking("zai", "glm-4.5-air", True)
         assert result is False
         assert any("does not support thinking" in r.message for r in caplog.records)
@@ -206,7 +206,7 @@ class TestSettingsValidateRoutes:
             opencode_model="glm-5.1",
             model_analyze="future-mystery-model",
         )
-        with caplog.at_level(logging.WARNING, logger="deep_research.capabilities"):
+        with caplog.at_level(logging.WARNING, logger="synapse_deep_research.capabilities"):
             info = s.validate_routes()
         assert info["stages"]["analyze"] == "future-mystery-model"
         assert any("future-mystery-model" in r.message for r in caplog.records)

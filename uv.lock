@@ -866,7 +866,7 @@ wheels = [
 ]
 
 [[package]]
-name = "deep-research"
+name = "synapse-deep-research"
 version = "0.4.0"
 source = { editable = "." }
 dependencies = [
