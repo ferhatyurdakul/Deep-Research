@@ -113,6 +113,13 @@ synapse-deep-research skills install
 
 That copies a small skill (a `SKILL.md` folder in the open [Agent Skills](https://agentskills.io) format) into every supported agent it finds in your home folder. Ask your agent for a deep, sourced investigation and it starts a research run, keeps working while it runs (a run takes minutes), then reads the saved report and the sources behind it.
 
+```mermaid
+flowchart LR
+    you(["You"]) --> agent["Your coding agent<br/>(Claude Code, Codex, Hermes, ...)<br/>main subscription"]
+    agent -- "starts a run with the skill" --> synapse["Synapse Deep Research<br/>second subscription (GLM models)"]
+    synapse -- "cited report + one line of JSON" --> agent
+```
+
 | Agent | Skills folder |
 |-------|---------------|
 | Claude Code | `~/.claude/skills/` |

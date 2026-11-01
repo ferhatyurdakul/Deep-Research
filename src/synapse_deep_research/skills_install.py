@@ -17,7 +17,7 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Optional
@@ -53,6 +53,8 @@ AGENTS: tuple = (
 class Target:
     label: str
     path: Path  # the skill's own folder: <skills dir>/synapse-deep-research
+    # An agent that reads this folder was found in the home folder. Only for display.
+    detected: bool = field(default=True, compare=False)
 
 
 @dataclass(frozen=True)
@@ -104,8 +106,11 @@ def choose_targets(
     by_folder: dict = {}  # agents that read the same folder share one copy
     for a in agents:
         folder = (cwd / a.project_dir if project else home / a.user_dir) / SKILL_NAME
-        by_folder.setdefault(folder, []).append(a.label)
-    return [Target(", ".join(labels), folder) for folder, labels in by_folder.items()]
+        by_folder.setdefault(folder, []).append(a)
+    return [
+        Target(", ".join(a.label for a in group), folder, any((home / a.detect).exists() for a in group))
+        for folder, group in by_folder.items()
+    ]
 
 
 def _write_atomic(path: Path, data: bytes) -> None:

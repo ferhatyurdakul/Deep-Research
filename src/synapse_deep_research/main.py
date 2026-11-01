@@ -526,14 +526,12 @@ def _print_skill_outcome(outcome, *, dry_run: bool) -> None:
 
 
 def _list_skills(skills, files: dict, *, project: bool) -> None:
-    home, cwd = Path.home(), Path.cwd()
     rows = []
-    for agent in skills.AGENTS:
-        target = skills.choose_targets([agent.key], project=project, home=home, cwd=cwd)[0]
+    for target in skills.choose_targets(["all"], project=project, home=Path.home(), cwd=Path.cwd()):
         state = skills.state(target, files)
         style = {"installed": "ok", "outdated": "warn"}.get(state, "muted")
-        rows.append((agent.label, Text.assemble(
-            (state, style), ("" if (home / agent.detect).exists() else "  (agent not found)", "muted"),
+        rows.append((target.label, Text.assemble(
+            (state, style), ("" if target.detected else "  (agent not found)", "muted"),
             "  ", (short_path(target.path), "muted"),
         )))
     console.print(panel(kv_grid(rows), title="Agent skill"))

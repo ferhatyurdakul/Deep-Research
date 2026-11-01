@@ -79,6 +79,16 @@ class TestTheRealAgentTable:
         targets = skills.choose_targets(["all"], project=False, home=home, cwd=project)
         assert len(targets) == 3  # claude, hermes and the shared .agents folder
 
+    def test_the_list_has_one_row_per_folder_with_every_agent_that_reads_it(self, home, project, monkeypatch, capsys):
+        (home / ".codex").mkdir()
+        code, out, _ = _run(["skills"], monkeypatch, capsys)
+        out = " ".join(out.replace("│", " ").split())  # long rows wrap inside the panel at test width
+        assert code == 0
+        assert out.count("not installed") == 3  # Claude Code, the shared folder, Hermes
+        assert "Codex, Gemini CLI, Cursor, GitHub Copilot, OpenCode not installed" in out
+        assert "Claude Code not installed (agent not found)" in out
+        assert "Codex, Gemini CLI, Cursor, GitHub Copilot, OpenCode not installed (agent not found)" not in out  # Codex is there
+
     def test_keys_are_unique_and_the_skill_name_is_the_folder_name(self):
         assert len({a.key for a in REAL_AGENTS}) == len(REAL_AGENTS)
         assert {"claude", "codex", "hermes"} <= {a.key for a in REAL_AGENTS}
