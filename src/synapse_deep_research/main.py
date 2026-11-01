@@ -19,7 +19,10 @@ from .logging_config import setup_logging
 from .models import ReportStyle, ResearchConfig, ResearchDepth, ResearchReport
 from .options import DEPTH_VALUES, STYLE_VALUES, TEMPLATE_VALUES
 from .storage.db import delete_session, fork_session, load_report as db_load
-from .ui import console, fail, glyph, note, ok, section, tty, warn
+from .ui import (
+    console, emit_json_error, enable_json_output, fail, glyph, json_output, note, ok,
+    section, tty, warn,
+)
 
 
 def check_config() -> bool:
@@ -99,6 +102,14 @@ def add_shape_args(parser: argparse.ArgumentParser, *, agent: bool = False) -> N
     )
 
 
+def add_output_args(parser: argparse.ArgumentParser) -> None:
+    """How a run reports back, shared by one-shot runs, continue and resynthesize."""
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Print the result as one JSON object on stdout, progress and messages on stderr (for scripts and agents)",
+    )
+
+
 def build_run_parser() -> CliParser:
     parser = CliParser()
     parser.add_argument(
@@ -106,6 +117,7 @@ def build_run_parser() -> CliParser:
         help="What to research (omit to open the interactive prompt)",
     )
     add_shape_args(parser, agent=True)
+    add_output_args(parser)
     return parser
 
 
@@ -126,6 +138,7 @@ def build_command_parser(name: str) -> CliParser:
                             help="New query for the fork (default: keep the original)")
     elif name in ("continue", "resynthesize"):
         add_shape_args(parser)
+        add_output_args(parser)
     elif name in ("login", "logout"):
         parser.add_argument("key", nargs="?", metavar="KEY",
                             help="Credential name, e.g. TAVILY_API_KEY" + (" or `all`" if name == "logout" else ""))
@@ -283,7 +296,7 @@ async def async_continue(
 
 
 async def followup_loop(report: ResearchReport, config: ResearchConfig, agent_mode: bool = False) -> None:
-    if not tty():
+    if not tty() or json_output():
         return
 
     while True:
@@ -398,10 +411,11 @@ def _ensure_ready() -> None:
         sys.exit(1)
 
     console.print()
-    warn(f"No {settings.active_api_key_env_name} found in env, .env, or keyring.")
+    missing = f"No {settings.active_api_key_env_name} found in env, .env, or keyring."
     if not tty():
-        note(f"Run `{PROG} setup` to store credentials, or set {settings.active_api_key_env_name} in your environment.")
+        fail(missing, hint=f"Run `{PROG} setup` to store credentials, or set {settings.active_api_key_env_name} in your environment.")
         sys.exit(1)
+    warn(missing)
 
     # The setup screen is the offer: Esc skips it.
     from .onboarding import run_setup
@@ -417,6 +431,8 @@ def _ensure_ready() -> None:
 
 def _run_llm_command(name: str, ns: argparse.Namespace) -> None:
     # continue / resynthesize make LLM calls: validate config first.
+    if ns.json:
+        enable_json_output()
     config = build_config(ns)
     _ensure_ready()
     shape = views.shape_from_namespace(ns)
@@ -530,6 +546,18 @@ def _warn_retired_settings() -> None:
 
 
 def main() -> None:
+    try:
+        _main()
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            emit_json_error()  # a --json run always ends with a JSON object, success or not
+        raise
+    except Exception as exc:  # noqa: BLE001 — still a JSON object for the caller, then the traceback
+        emit_json_error(f"{type(exc).__name__}: {exc}")
+        raise
+
+
+def _main() -> None:
     # Warnings and errors only by default: the INFO stream is per-call route
     # dumps and result counts that clutter the UI. SYNAPSE_DEEP_RESEARCH_LOG_LEVEL=INFO
     # (or DEBUG) brings them back.
@@ -542,7 +570,12 @@ def main() -> None:
         run_command(argv[0], argv[1:])
         return
 
-    args = build_run_parser().parse_args(argv)
+    parser = build_run_parser()
+    args = parser.parse_args(argv)
+    if args.json:
+        if not args.query:
+            parser.error("--json needs a QUESTION to research")
+        enable_json_output()
 
     # No positional query → launch the interactive REPL. Direct one-shot
     # usage like `synapse-deep-research "topic"` skips the REPL.

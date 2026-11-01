@@ -3,6 +3,12 @@
 
 ## Unreleased
 
+### New — `--json` for scripts and agents
+
+- **`--json`** on a one-shot run, `continue` and `resynthesize` prints one JSON object on stdout: the session id, the path of the saved Markdown report, the executive summary, follow-up questions and counts. The banner, progress and warnings go to stderr, and the report is not echoed. A failed run prints `{"ok": false, "error": …}` and exits non-zero. Without the flag nothing changes.
+- A missing API key with no terminal is now reported as an error with the fix next to it (`synapse-deep-research setup`, or set the variable) rather than a warning followed by a note.
+- The one-time carry-over notice from the old name now goes to stderr, so it can never land in front of the JSON.
+
 ### Breaking — renamed to Synapse Deep Research
 
 - **The tool is now Synapse Deep Research.** The package and the command are `synapse-deep-research` (was `deep-research`) and the Python module is `synapse_deep_research`. The old command is gone, not kept as an alias: `pipx uninstall deep-research`, then install the new name.

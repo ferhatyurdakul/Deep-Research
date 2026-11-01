@@ -8,7 +8,9 @@ import config, storage, or the pipeline.
 """
 from __future__ import annotations
 
+import json
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -64,6 +66,53 @@ def problem_count() -> int:
     return _problems
 
 
+# --- machine-readable runs (--json) ---------------------------------------
+# A --json run keeps stdout for exactly one JSON object. Everything meant for a
+# person (banner, progress, warnings, the saved card) goes to stderr instead,
+# by pointing the shared console there, so no caller has to know about it.
+
+_json_mode = False
+_json_sent = False
+_json_problems: list = []  # plain text of each warn()/fail(), for the error object
+
+
+def enable_json_output() -> None:
+    global _json_mode, _json_sent
+    _json_mode, _json_sent = True, False
+    _json_problems.clear()
+    console.file = sys.stderr
+
+
+def disable_json_output() -> None:
+    global _json_mode
+    _json_mode = False
+    _json_problems.clear()
+    console.file = None  # type: ignore[assignment]  # back to looking up sys.stdout on each write
+
+
+def json_output() -> bool:
+    return _json_mode
+
+
+def emit_json(payload: dict) -> None:
+    global _json_sent
+    _json_sent = True
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    sys.stdout.flush()
+
+
+def emit_json_error(detail: str = "") -> None:
+    """The error object of a --json run that is about to exit non-zero. Does
+    nothing outside --json, or when a result has already been sent."""
+    if _json_mode and not _json_sent:
+        emit_json({"ok": False, "error": " ".join(_json_problems) or detail or "the run failed"})
+
+
+def _record_problem(*messages: Optional[str]) -> None:
+    if _json_mode:
+        _json_problems.append(" ".join(Text.from_markup(m).plain for m in messages if m))
+
+
 def ok(msg: str) -> None:
     console.print(f"[ok]{glyph('ok')}[/ok] {msg}")
 
@@ -71,12 +120,14 @@ def ok(msg: str) -> None:
 def warn(msg: str) -> None:
     global _problems
     _problems += 1
+    _record_problem(msg)
     console.print(f"[warn]{glyph('warn')}[/warn] {msg}")
 
 
 def fail(msg: str, hint: Optional[str] = None) -> None:
     global _problems
     _problems += 1
+    _record_problem(msg, hint)
     console.print(f"[err]{glyph('fail')}[/err] {msg}")
     if hint:
         console.print(f"  [muted]{hint}[/muted]")

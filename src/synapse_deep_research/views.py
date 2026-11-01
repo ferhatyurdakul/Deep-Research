@@ -24,8 +24,8 @@ from .config import settings
 from .models import ResearchReport
 from .options import academic_reason, stage_summary
 from .ui import (
-    bullets, console, fmt_duration, glyph, kv_grid, note, numbered, panel, section,
-    plural, short_path,
+    bullets, console, emit_json, fmt_duration, glyph, json_output, kv_grid, note, numbered,
+    panel, section, plural, short_path,
 )
 
 PROG = "synapse-deep-research"
@@ -346,17 +346,41 @@ def print_done(
     ))
 
 
+def result_payload(
+    report: ResearchReport, *, session_id: int, path: Path, depth: str,
+    parent_session_id: Optional[int] = None, started: Optional[float] = None,
+) -> dict:
+    """What a --json run prints on stdout: where the report is and enough to
+    decide what to do next, not the report itself (that is the file at
+    `report_path`)."""
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "parent_session_id": parent_session_id,
+        "query": report.query,
+        "depth": depth,
+        "report_path": str(Path(path).resolve()),
+        "executive_summary": report.executive_summary,
+        "follow_up_questions": list(report.follow_up_questions),
+        "sources": len(report.sources),
+        "iterations": len(report.iterations),
+        "seconds": round(time.monotonic() - started, 1) if started is not None else None,
+    }
+
+
 def present_report(
     report: ResearchReport, *, depth: str, parent_session_id: Optional[int] = None,
     started: Optional[float] = None, relation: Optional[str] = None, repl: bool = False,
 ) -> int:
     """Show a finished report, persist it (markdown + DB), print the saved
     card, and return the new session id. The one place that does this, so
-    one-shot runs, follow-ups, continue, resynthesize and the REPL agree."""
+    one-shot runs, follow-ups, continue, resynthesize and the REPL agree.
+    A --json run does not echo the report; it prints the result object."""
     from .output.report import display_report, save_report
     from .storage.db import save_report as db_save
 
-    display_report(report)
+    if not json_output():
+        display_report(report)
     path = save_report(report)
     session_id = db_save(report, depth=depth, parent_session_id=parent_session_id)
     report.id = session_id
@@ -364,6 +388,11 @@ def present_report(
         session_id=session_id, path=path, report=report,
         started=started, relation=relation, repl=repl,
     )
+    if json_output():
+        emit_json(result_payload(
+            report, session_id=session_id, path=path, depth=depth,
+            parent_session_id=parent_session_id, started=started,
+        ))
     return session_id
 
 

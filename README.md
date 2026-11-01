@@ -195,6 +195,25 @@ Help is generated from the same command registry and parsers the CLI runs on, so
 | `--papers`               | —                                             | auto       | Always adds research papers (arXiv + Semantic Scholar)   |
 | `--no-papers`            | —                                             | auto       | Web only, even for `deep` or the science / literature templates |
 | `--fresh`                | —                                             | off        | Disables cross-session URL deduplication                 |
+| `--json`                 | —                                             | off        | Print the result as one JSON object on stdout (see below) |
+
+### Scripts and agents: `--json`
+
+`--json` is for callers that are not a person at a terminal. It works on a one-shot run and on `continue` and `resynthesize`:
+
+```bash
+synapse-deep-research --json --depth quick "How do solid-state batteries work?"
+```
+
+Stdout carries exactly one line, a JSON object. The banner, progress, warnings and the "saved" card go to stderr, and the report itself is not printed: it is saved as Markdown and the object says where.
+
+```json
+{"ok": true, "session_id": 7, "parent_session_id": null, "query": "How do solid-state batteries work?",
+ "depth": "quick", "report_path": "/home/you/work/outputs/20261101_…md", "executive_summary": "…",
+ "follow_up_questions": ["…"], "sources": 12, "iterations": 1, "seconds": 84.3}
+```
+
+A failure ends the same way, with a non-zero exit status and an error object: `{"ok": false, "error": "No ZAI_API_KEY found in env, .env, or keyring. Run `synapse-deep-research setup` …"}`. Usage mistakes (an unknown flag, `--json` with no question) are plain text on stderr with exit status 2. Nothing ever prompts when there is no terminal. A run takes minutes, so give the caller a generous timeout or run it in the background.
 
 ## Search Sources
 

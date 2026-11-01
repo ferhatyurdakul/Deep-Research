@@ -17,13 +17,23 @@ def run() -> None:
 
         carried = legacy_install.carry_over()
         if carried:
-            from .ui import note, ok
+            # stderr, not stdout: this runs before the command line is read, and a
+            # --json run must find nothing but its JSON object on stdout.
+            from rich.markup import escape
 
-            ok(f"Carried over from your old `{legacy_install.OLD_NAME}` install: {legacy_install.describe(carried)}.")
+            from .ui import err_console, glyph
+
+            err_console.print(
+                f"[ok]{glyph('ok')}[/ok] Carried over from your old `{legacy_install.OLD_NAME}` install: "
+                f"{legacy_install.describe(carried)}."
+            )
             where = [str(d) for d in carried.old_dirs]
             if carried.keys:
                 where.append(f"the `{legacy_install.OLD_NAME}` keyring entries")
-            note(f"The old copies were left in place ({' and '.join(where)}); delete them once you no longer need them.")
+            err_console.print(
+                f"[muted]The old copies were left in place ({escape(' and '.join(where))}); "
+                f"delete them once you no longer need them.[/muted]"
+            )
     except Exception:  # noqa: BLE001 — a failed carry-over must never keep the CLI from starting
         logging.getLogger(__name__).debug("carry-over from the old name failed", exc_info=True)
 

@@ -8,6 +8,7 @@ documented, every option has help text, every documented value exists.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -370,6 +371,150 @@ class TestMainFlows:
     def test_status_command(self, monkeypatch, capsys):
         code, out, _ = _run(["status"], monkeypatch, capsys)
         assert code == 0 and "Stage models" in out
+
+
+# --- --json: a result an agent or script can parse --------------------------------
+
+class TestJsonOutput:
+    @staticmethod
+    def _stub_run(monkeypatch, error=None):
+        async def fake(query, config, agent):
+            if error:
+                raise RuntimeError(error)
+            return _report(query)
+
+        monkeypatch.setattr(main_mod, "research_query", fake)
+        monkeypatch.setattr(main_mod, "_ensure_ready", lambda: None)
+
+    def test_the_flag_is_on_run_continue_and_resynthesize(self):
+        assert main_mod.build_run_parser().parse_args(["--json", "q"]).json is True
+        assert main_mod.build_run_parser().parse_args(["q"]).json is False
+        for name in ("continue", "resynthesize"):
+            assert main_mod.build_command_parser(name).parse_args(["3", "--json"]).json is True
+
+    def test_other_commands_do_not_take_it(self, monkeypatch, capsys):
+        code, out, err = _run(["history", "--json"], monkeypatch, capsys)
+        assert code == 2 and out == "" and "unrecognized" in err
+
+    def test_it_is_listed_in_help(self, monkeypatch, capsys):
+        _, out, _ = _run(["--help"], monkeypatch, capsys)
+        assert "--json" in out and "scripts and agents" in " ".join(out.split())
+
+    def test_it_needs_a_question(self, monkeypatch, capsys):
+        code, out, err = _run(["--json"], monkeypatch, capsys)
+        assert code == 2 and out == "" and "needs a QUESTION" in err
+
+    def test_a_run_prints_exactly_one_json_object_and_not_the_report(self, isolated_store, monkeypatch, capsys):
+        from pathlib import Path
+
+        self._stub_run(monkeypatch)
+        code, out, err = _run(["--json", "--depth", "quick", "what is x"], monkeypatch, capsys)
+
+        assert code == 0
+        assert len(out.strip().splitlines()) == 1
+        result = json.loads(out)
+        assert result["ok"] is True and result["session_id"] == 1 and result["parent_session_id"] is None
+        assert result["query"] == "what is x" and result["depth"] == "quick"
+        assert result["executive_summary"] == "Summary."
+        assert result["follow_up_questions"] == ["Next question?"]
+        assert result["sources"] == 1 and result["iterations"] == 1 and result["seconds"] is not None
+        path = Path(result["report_path"])
+        assert path.is_absolute() and "Text." in path.read_text(encoding="utf-8")  # the report is in the file
+        assert "Text." not in out and "Text." not in err  # and is not echoed to the terminal
+        assert "what is x" in err and "Saved" in err  # a person watching stderr still sees the banner and the card
+
+    def test_a_failed_run_prints_an_error_object_and_exits_1(self, isolated_store, monkeypatch, capsys):
+        self._stub_run(monkeypatch, error="provider said no")
+        code, out, err = _run(["--json", "q"], monkeypatch, capsys)
+
+        assert code == 1
+        result = json.loads(out)
+        assert result["ok"] is False and "provider said no" in result["error"]
+        assert "provider said no" in err
+
+    def test_a_missing_key_is_an_error_object_that_says_how_to_fix_it(self, monkeypatch, capsys):
+        monkeypatch.setattr(main_mod, "check_config", lambda: False)
+        monkeypatch.setattr(main_mod, "tty", lambda: False)
+        monkeypatch.setattr(main_mod.settings, "zai_api_key", "")
+        code, out, _ = _run(["--json", "q"], monkeypatch, capsys)
+
+        result = json.loads(out)
+        assert code == 1 and result["ok"] is False
+        assert "No ZAI_API_KEY found" in result["error"] and "synapse-deep-research setup" in result["error"]
+
+    def test_a_crash_still_ends_with_an_error_object(self, isolated_store, monkeypatch, capsys):
+        monkeypatch.setattr(main_mod, "_ensure_ready", lambda: None)
+        monkeypatch.setattr(main_mod, "build_config", lambda args: (_ for _ in ()).throw(KeyError("template")))
+        monkeypatch.setattr(sys, "argv", ["synapse-deep-research", "--json", "q"])
+        with pytest.raises(KeyError):
+            main_mod.main()
+        assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "KeyError: 'template'"}
+
+    def test_continue_reports_its_parent_session(self, isolated_store, monkeypatch, capsys):
+        from synapse_deep_research.storage.db import save_report
+
+        parent = save_report(_report(), depth="standard")
+
+        async def fake_continue(previous, config):
+            return _report(previous.query)
+
+        monkeypatch.setattr("synapse_deep_research.pipeline.orchestrator.acontinue_research", fake_continue)
+        monkeypatch.setattr(main_mod, "_ensure_ready", lambda: None)
+        code, out, _ = _run(["continue", str(parent), "--json"], monkeypatch, capsys)
+
+        result = json.loads(out)
+        assert code == 0 and result["parent_session_id"] == parent and result["session_id"] != parent
+
+    def test_without_the_flag_nothing_changes(self, isolated_store, monkeypatch, capsys):
+        self._stub_run(monkeypatch)
+        code, out, err = _run(["what is x"], monkeypatch, capsys)
+
+        assert code == 0 and "Text." in out and "Saved" in out  # the report and the card, on stdout as before
+        with pytest.raises(ValueError):
+            json.loads(out)
+
+
+class TestJsonMode:
+    def test_the_console_moves_to_stderr_and_comes_back(self, capsys):
+        from synapse_deep_research import ui
+
+        ui.enable_json_output()
+        ui.console.print("for a person")
+        ui.emit_json({"ok": True})
+        ui.disable_json_output()
+        ui.console.print("back on stdout")
+
+        out, err = capsys.readouterr()
+        assert out.splitlines() == ['{"ok": true}', "back on stdout"]
+        assert err.strip() == "for a person"
+
+    def test_the_error_object_is_the_plain_text_of_warnings_and_failures(self, capsys):
+        from synapse_deep_research import ui
+
+        ui.enable_json_output()
+        ui.warn("careful [cmd]x[/cmd]")
+        ui.fail("broke", hint="try [cmd]y[/cmd]")
+        ui.emit_json_error()
+
+        assert json.loads(capsys.readouterr().out) == {"ok": False, "error": "careful x broke try y"}
+
+    def test_no_error_object_outside_json_mode_or_after_a_result(self, capsys):
+        from synapse_deep_research import ui
+
+        ui.emit_json_error("ignored")
+        assert capsys.readouterr().out == ""
+
+        ui.enable_json_output()
+        ui.emit_json({"ok": True})
+        ui.emit_json_error("too late")
+        assert capsys.readouterr().out.count("\n") == 1
+
+    def test_unicode_survives_unescaped(self, capsys):
+        from synapse_deep_research import ui
+
+        ui.enable_json_output()
+        ui.emit_json({"query": "café — naïve"})
+        assert "café — naïve" in capsys.readouterr().out
 
 
 # --- ui helpers --------------------------------------------------------------

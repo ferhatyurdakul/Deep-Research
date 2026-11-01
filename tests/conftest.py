@@ -55,6 +55,16 @@ def fake_keyring(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _json_mode_does_not_leak():
+    """--json points the shared console at stderr for the rest of the process;
+    put it back so one test's run can't redirect the next one's output."""
+    from synapse_deep_research import ui
+
+    yield
+    ui.disable_json_output()
+
+
+@pytest.fixture(autouse=True)
 def _no_live_model_lookup(monkeypatch):
     """The setup screen and /model ask the provider which models the account has
     (a network call). Tests never do; the ones covering the lookup itself stub httpx."""

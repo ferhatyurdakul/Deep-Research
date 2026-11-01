@@ -121,6 +121,7 @@ TOP_EXAMPLES: tuple = (
     (f'{PROG} "How do solid-state batteries work?"', "one query, then exit"),
     (f'{PROG} --papers "CRISPR off-target effects"', "always include research papers"),
     (f'{PROG} --template market --style brief "EV charging market"', ""),
+    (f'{PROG} --json --depth quick "EV charging market"', "for scripts and agents: one JSON object on stdout"),
     (f"{PROG} history", "past sessions"),
     (f"{PROG} continue 3 --depth deep", "dig further into session 3"),
 )

@@ -193,7 +193,9 @@ class TestEntryPoint:
 
         entry.run()
 
-        out = " ".join(capsys.readouterr().out.split())  # the terminal wraps long lines
+        captured = capsys.readouterr()
+        out = " ".join(captured.err.split())  # the terminal wraps long lines
+        assert captured.out == ""  # stdout stays free for a --json run
         assert calls == ["carry", "main"]
         assert "Carried over" in out and "1 API key" in out
         assert "/old/place" in out and "keyring entries" in out and "left in place" in out
@@ -204,7 +206,8 @@ class TestEntryPoint:
 
         entry.run()
 
-        assert capsys.readouterr().out == ""
+        captured = capsys.readouterr()
+        assert captured.out == "" and captured.err == ""
 
     def test_a_failing_carry_over_never_stops_the_cli_starting(self, monkeypatch):
         started = []
