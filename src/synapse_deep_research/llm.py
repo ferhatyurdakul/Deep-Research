@@ -21,7 +21,7 @@ from .capabilities import (
     thinking_dialect,
     validate_route,
 )
-from .config import settings
+from .config import _PROVIDER_PROTOCOLS, settings
 from .usage import current_stage, get_tracker
 
 logger = logging.getLogger(__name__)
@@ -189,7 +189,7 @@ def _swap_to_fallback_provider() -> bool:
     fallback = settings.llm_fallback_provider
     if not fallback or fallback == settings.active_provider:
         return False
-    if fallback not in ("zai", "opencode-go"):
+    if fallback not in _PROVIDER_PROTOCOLS:
         # Defensive: validate_routes() should have caught this at startup.
         return False
     original = settings.llm_provider

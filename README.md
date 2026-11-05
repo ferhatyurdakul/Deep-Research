@@ -2,7 +2,7 @@
 
 **Deep research on your second AI subscription, so your main agent keeps working.**
 
-Synapse is a command-line research agent. Give it a question and it breaks it into sub-questions, searches the web and paper databases (arXiv, Semantic Scholar), reads every source, goes back for what is missing, and writes a report with evidence-backed citations. It runs on a model subscription of its own, [Z.AI](https://z.ai) GLM models or [OpenCode Go](https://opencode.ai/go), so a long research job does not use up your main assistant's usage limits or fill its context window.
+Synapse is a command-line research agent. Give it a question and it breaks it into sub-questions, searches the web and paper databases (arXiv, Semantic Scholar), reads every source, goes back for what is missing, and writes a report with evidence-backed citations. It runs on a model subscription of its own ([Z.AI](https://z.ai) GLM models), so a long research job does not use up your main assistant's usage limits or fill its context window.
 
 Use it two ways:
 
@@ -94,7 +94,7 @@ synapse-deep-research setup
 
 It walks you through five steps — each one a small picker or prompt that disappears as you go:
 
-1. **Provider** — Z.AI or OpenCode Go.
+1. **Provider** — Z.AI (the only provider for now).
 2. **API key** — pasted hidden and stored in your OS keychain, never in a file.
 3. **Tavily search key** — optional; better web search than DuckDuckGo alone.
 4. **Models** — accept the recommended models, or pick one for each of the four stages (see **Multi-Model Routing** below). If your provider lists the models your account can use, that list is shown too.
@@ -361,7 +361,7 @@ Seeing your options:
 | `/papers [auto\|on\|off]` | Research papers (arXiv + Semantic Scholar): `auto` follows the template and depth, `on` always, `off` never |
 | `/agent` | Toggle autonomous agent loop |
 | `/fresh` | Toggle fresh mode (revisit URLs from past sessions) |
-| `/provider [zai\|opencode-go]` | Show or switch LLM provider |
+| `/provider` | Show the LLM provider (Z.AI is the only one for now) |
 | `/model [stage] [model]` | Choose and save the model for each pipeline stage (`all`, `decompose`, `analyze`, `gap_analysis`, `synthesize`; `default` returns to the recommendation) |
 | `/setup` | Open the setup screen (provider, API key, models) |
 | `/login [KEY]` | Set a single API key in the OS keyring |
@@ -404,13 +404,12 @@ A cheap, fast model on the easy or high-volume stages and a strong one where qua
 | Provider | decompose | analyze | gap_analysis | synthesize |
 |---|---|---|---|---|
 | Z.AI | `glm-5.3-flash` | `glm-5.3-flash` | `glm-5.3` | `glm-5.3` |
-| OpenCode Go | `glm-5.1` | `glm-5.1` | `glm-5.1` | `glm-5.1` |
 
 **Overriding from the environment** (CI, scripts): `MODEL_DECOMPOSE`, `MODEL_ANALYZE`, `MODEL_GAP_ANALYSIS`, `MODEL_SYNTHESIZE` win over everything saved. `/model` and setup tell you when one of them is shadowing your choice. `LLM_ROUTE` (the old preset system) is gone; the app warns if it is still set.
 
 **Z.AI models** (checked against [Z.AI's docs](https://docs.z.ai/guides/overview/pricing)): `glm-5.3` (flagship, 1M context), `glm-5.3-flash` (low-cost tier; on the Coding Plan with 3× the quota of `glm-5.3`), `glm-5.3-flashx` (speed tier; it appears in the Coding Plan's model list but calls are rejected with error 1311, so it needs a plan that includes it), and the previous generations `glm-5.2` and `glm-5.1`. When Z.AI's API can list the models your account has, the pickers also show those we haven't verified; a model your account lacks is tagged. `glm-5.3` models always think — thinking can't be turned off.
 
-Any ID your provider serves works: a name that isn't in the registry is accepted with a warning (its thinking and endpoint support are then unverified), and a model registered only for another provider is refused. `GLM_MODEL` / `OPENCODE_MODEL` still exist as the provider's fallback model for calls that belong to no stage.
+Any ID your provider serves works: a name that isn't in the registry is accepted with a warning (its thinking and endpoint support are then unverified). `GLM_MODEL` still exists as the provider's fallback model for calls that belong to no stage.
 
 ## Rate Limits & Concurrency
 
@@ -434,7 +433,7 @@ attempt count:
 
 | Env var | Default | Effect |
 |---|:---:|---|
-| `LLM_MAX_RETRIES` | `5` | Attempts before giving up (then a fallback swap or `ProviderLimitExceeded`) |
+| `LLM_MAX_RETRIES` | `5` | Attempts before giving up (then `ProviderLimitExceeded`) |
 | `LLM_RETRY_BASE_SECONDS` | `2.0` | Base backoff unit |
 | `LLM_RETRY_MAX_SECONDS` | `60.0` | Per-attempt wait cap |
 
@@ -445,10 +444,6 @@ attempt count:
 |---|---|
 | `MAX_SUB_QUESTIONS` / `MAX_SEARCH_RESULTS` / `MAX_ITERATIONS` / `MAX_SOURCES` | Override the depth preset |
 | `AGENT_BUDGET_QUICK` / `_STANDARD` / `_DEEP` | Override agent iteration budgets (capped at 8) |
-
-Set `LLM_FALLBACK_PROVIDER` (e.g. `zai` when primary is `opencode-go`, or vice
-versa) so a run that exhausts retries on one provider swaps to the other instead
-of aborting.
 
 Failures degrade instead of discarding work. A source whose analysis fails is
 skipped while the rest continue; an iteration that fails after sources were
@@ -467,12 +462,12 @@ latency-sensitive. They want different knobs:
 |---|---|---|
 | Concurrency | `MAX_LLM_CONCURRENCY=2–5`, `AGENT_MAX_LLM_CONCURRENCY=2–3` | N/A (one call at a time) |
 | Retries | `LLM_MAX_RETRIES=5`, longer `LLM_RETRY_MAX_SECONDS` (60s) — OK to wait | Fewer retries, short waits — fail fast for the human |
-| Depth/agent | `--depth deep`/`--agent` are heavy; pair with a fallback provider | — |
+| Depth/agent | `--depth deep`/`--agent` are heavy; keep concurrency low | — |
 | Thinking | On for analysis/synthesis quality | Off for speed unless needed |
 
 If you're hitting GLM 429s during ad-hoc deep/agent research, the default
 (`MAX_LLM_CONCURRENCY=2`) is already the safe setting — make sure you haven't
-raised it, and set `LLM_FALLBACK_PROVIDER`. If you run research alongside heavy
+raised it. If you run research alongside heavy
 coding traffic on the same key, the research run is almost certainly the burst
 source — cap it there rather than throttling your editor.
 

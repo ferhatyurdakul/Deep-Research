@@ -73,6 +73,7 @@ class TestRegistry:
         cap = lookup("zai", "glm-5.3")
         assert cap.tier == "production"
 
+    @pytest.mark.opencode_go
     def test_opencode_go_listing_is_untouched(self):
         assert "glm-5.1" in listed_models("opencode-go") and "kimi-k2.6" in listed_models("opencode-go")
 
@@ -87,10 +88,11 @@ class TestRecommendedModels:
             "synthesize": "glm-5.3",
         }
 
+    @pytest.mark.opencode_go
     def test_opencode_go_keeps_one_production_model_everywhere(self):
         assert set(recommended_stage_models("opencode-go").as_dict().values()) == {"glm-5.1"}
 
-    @pytest.mark.parametrize("provider", ["zai", "opencode-go"])
+    @pytest.mark.parametrize("provider", ["zai", pytest.param("opencode-go", marks=pytest.mark.opencode_go)])
     def test_every_recommendation_is_a_registered_listed_model(self, provider):
         for stage, model in recommended_stage_models(provider).as_dict().items():
             assert lookup(provider, model) is not None, (provider, stage, model)
@@ -192,6 +194,7 @@ class TestEffectiveStageModels:
         assert s.stage_sources()["analyze"] == "environment"
         assert s.stage_sources()["decompose"] == "environment"
 
+    @pytest.mark.opencode_go
     def test_a_full_set_of_environment_overrides_ignores_everything_else(self):
         userconfig.save_choices("opencode-go", {"analyze": "glm-5"})
         s = _opencode(
@@ -203,6 +206,7 @@ class TestEffectiveStageModels:
             "gap_analysis": "kimi-k2.6", "synthesize": "deepseek-v4-pro",
         }
 
+    @pytest.mark.opencode_go
     def test_each_provider_has_its_own_saved_models(self):
         userconfig.save_choices("zai", {"analyze": "glm-5.2"})
         assert _opencode().effective_stage_models()["analyze"] == "glm-5.1"  # not zai's choice
@@ -224,6 +228,7 @@ class TestValidateRoutes:
         # An unregistered-for-zai model is tolerated at this layer (warned, not fatal)...
         assert _zai().validate_routes()["stages"]["synthesize"] == "kimi-k2.6"
 
+    @pytest.mark.opencode_go
     def test_validates_cross_family_stage(self):
         # A stage on MiniMax (anthropic family) must be validated with its own family.
         s = _opencode(model_synthesize="minimax-m2.7")

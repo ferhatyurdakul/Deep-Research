@@ -57,6 +57,7 @@ class TestApplyThinking:
         _apply_thinking(kwargs, route)
         assert kwargs["extra_body"] == {"thinking": {"type": "enabled", "clear_thinking": True}}
 
+    @pytest.mark.opencode_go
     def test_opencode_go_glm_gets_extra_body(self):
         # GLM via OpenCode Go proxies to Z.AI upstream; same dialect applies.
         route = self._route("opencode-go", "glm-5.1", "openai")
@@ -65,6 +66,7 @@ class TestApplyThinking:
         assert "extra_body" in kwargs
         assert kwargs["extra_body"]["thinking"]["clear_thinking"] is True
 
+    @pytest.mark.opencode_go
     def test_opencode_go_kimi_omits_thinking(self, caplog):
         # Reasoning-native model: don't ship Z.AI-shaped fields.
         route = self._route("opencode-go", "kimi-k2.6", "openai")
@@ -75,12 +77,14 @@ class TestApplyThinking:
         assert "thinking" not in kwargs
         assert any("native reasoning" in r.message for r in caplog.records)
 
+    @pytest.mark.opencode_go
     def test_opencode_go_deepseek_omits_thinking(self):
         route = self._route("opencode-go", "deepseek-v4-pro", "openai")
         kwargs = {}
         _apply_thinking(kwargs, route)
         assert kwargs == {}
 
+    @pytest.mark.opencode_go
     def test_opencode_go_minimax_gets_anthropic_thinking(self):
         route = self._route("opencode-go", "minimax-m2.7", "anthropic")
         kwargs = {"model": "minimax-m2.7"}
@@ -113,6 +117,7 @@ class TestApplyThinking:
 class TestUpstreamRequestErrorWrapping:
     """A 400 from the upstream should surface with the routing context."""
 
+    @pytest.mark.opencode_go
     def test_wrap_includes_provider_model_family_dialect(self):
         # Build a fake BadRequestError-shaped exception. The real openai
         # BadRequestError needs a response object, so we substitute the
@@ -155,6 +160,7 @@ class TestBackwardCompatZaiDefaultPath:
         assert kwargs["extra_body"] == {"thinking": {"type": "enabled", "clear_thinking": True}}
 
 
+@pytest.mark.opencode_go
 class TestEndToEndDispatchPerFamily:
     """
     End-to-end coverage for one working model from each supported endpoint

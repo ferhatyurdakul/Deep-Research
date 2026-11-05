@@ -148,6 +148,7 @@ class TestRunSetup:
         assert onboarding.run_setup() is True
         assert ("synapse-deep-research", "TAVILY_API_KEY") not in env.keyring.store
 
+    @pytest.mark.opencode_go
     def test_picking_the_other_provider(self, env, monkeypatch):
         script(monkeypatch, picks=["opencode-go", "recommended", "skip"], texts=["oc-key", ""])
         assert onboarding.run_setup() is True

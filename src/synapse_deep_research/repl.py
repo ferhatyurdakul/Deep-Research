@@ -648,7 +648,7 @@ COMMANDS: tuple = (
     Command("/fresh", _cmd_fresh, "Toggle fresh mode (revisit URLs from past sessions)",
             group="Research",
             details="By default, pages analyzed in earlier sessions are skipped so each run finds new material.", display="silent"),
-    Command("/provider", _cmd_provider, "Show or switch the LLM provider", "[zai|opencode-go]",
+    Command("/provider", _cmd_provider, "Show or switch the LLM provider", "[" + "|".join(_PROVIDER_PROTOCOLS) + "]",
             group="Model", choices=_provider_choices, current=lambda s: _safe(lambda: settings.active_provider), display="silent"),
     Command("/model", _cmd_model, "Choose the model for each pipeline stage", "[stage] [model]",
             group="Model", choices=_model_stage_choices, arg_choices=_model_arg_choices,

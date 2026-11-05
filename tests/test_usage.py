@@ -88,6 +88,7 @@ class _FakeRateLimit(Exception):
     """Stand-in for openai.RateLimitError, which requires a response object."""
 
 
+@pytest.mark.opencode_go
 class TestFallbackOnRateLimit:
     def _patch_rate_limit_types(self):
         return patch.object(llm, "_RATE_LIMIT_TYPES", (_FakeRateLimit,))

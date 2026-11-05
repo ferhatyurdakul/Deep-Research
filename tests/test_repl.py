@@ -115,6 +115,7 @@ class TestProviderAndRouteCommands:
         with pytest.raises(KeyError):
             dispatch("/route quality", ReplState())
 
+    @pytest.mark.opencode_go
     def test_provider_switch_is_saved(self):
         from synapse_deep_research import userconfig
         from synapse_deep_research import config as cfg_module
@@ -883,6 +884,7 @@ class TestModelCommand:
         dispatch("/model gap-analysis glm-5.2", ReplState())
         assert cfg.effective_stage_models()["gap_analysis"] == "glm-5.2"
 
+    @pytest.mark.opencode_go
     def test_a_model_from_another_provider_is_rejected(self, cfg, capsys):
         from synapse_deep_research import userconfig
 

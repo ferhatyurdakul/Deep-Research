@@ -1,7 +1,7 @@
 [project]
 name = "synapse-deep-research"
 version = "0.4.0"
-description = "AI-powered deep research CLI using Z.AI GLM and OpenCode Go models"
+description = "AI-powered deep research CLI using Z.AI GLM models"
 requires-python = ">=3.9"
 dependencies = [
     "openai>=1.0.0",
@@ -41,4 +41,5 @@ synapse_deep_research = ["skill/*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+markers = ["opencode_go: needs OpenCode Go; skipped while capabilities.OPENCODE_GO_ENABLED is False"]
 testpaths = ["tests"]

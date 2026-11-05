@@ -7,8 +7,8 @@ Uses the `keyring` library, which delegates to:
   - Windows: Credential Manager
 
 Service name is "synapse-deep-research"; the key argument is the same env-var name
-the rest of the codebase already uses (`ZAI_API_KEY`, `OPENCODE_API_KEY`,
-`TAVILY_API_KEY`, etc.) so resolution logic in config.py just substitutes
+the rest of the codebase already uses (`ZAI_API_KEY`, `TAVILY_API_KEY`,
+etc.) so resolution logic in config.py just substitutes
 this backend for the .env-file lookup.
 
 Plain-text storage in .env is still supported for backward compat and
@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+
+from .capabilities import OPENCODE_GO_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ SERVICE_NAME = "synapse-deep-research"
 MANAGED_KEYS: tuple[tuple[str, str, bool], ...] = (
     # (env_var_name, friendly_label, required_for_default_provider)
     ("ZAI_API_KEY",              "Z.AI API key",              True),
-    ("OPENCODE_API_KEY",         "OpenCode Go API key",       False),
+    *((("OPENCODE_API_KEY",      "OpenCode Go API key",       False),) if OPENCODE_GO_ENABLED else ()),
     ("TAVILY_API_KEY",           "Tavily search API key",     False),
     ("SEMANTIC_SCHOLAR_API_KEY", "Semantic Scholar API key",  False),
 )

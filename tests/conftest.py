@@ -10,6 +10,8 @@ import tempfile
 
 import pytest
 
+from synapse_deep_research.capabilities import OPENCODE_GO_ENABLED
+
 # Module level: Settings reads the saved provider at import time, before any
 # fixture has run.
 os.environ["SYNAPSE_DEEP_RESEARCH_CONFIG_FILE"] = os.path.join(tempfile.mkdtemp(prefix="dr-test-config-"), "config.json")
@@ -71,3 +73,14 @@ def _no_live_model_lookup(monkeypatch):
     import synapse_deep_research.options as options
 
     monkeypatch.setattr(options, "fetch_account_models", lambda *a, **k: None)
+
+
+def pytest_collection_modifyitems(config, items):
+    """OpenCode Go is switched off (capabilities.OPENCODE_GO_ENABLED). Tests marked
+    `opencode_go` need it, so they skip until it is switched back on."""
+    if OPENCODE_GO_ENABLED:
+        return
+    skip = pytest.mark.skip(reason="OpenCode Go is switched off (capabilities.OPENCODE_GO_ENABLED)")
+    for item in items:
+        if "opencode_go" in item.keywords:
+            item.add_marker(skip)

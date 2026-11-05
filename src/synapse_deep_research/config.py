@@ -9,6 +9,7 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel
 
 from . import userconfig
+from .capabilities import OPENCODE_GO_ENABLED
 
 logger = logging.getLogger(__name__)
 
@@ -105,13 +106,14 @@ if _legacy_db.exists() and not DB_PATH.exists() and _legacy_db != DB_PATH:
 # endpoint, so it can be paired with either family at runtime.
 _PROVIDER_PROTOCOLS: dict[str, tuple[str, ...]] = {
     "zai": ("openai",),
-    "opencode-go": ("openai", "anthropic"),
 }
+if OPENCODE_GO_ENABLED:  # switched off for now, see capabilities.OPENCODE_GO_ENABLED
+    _PROVIDER_PROTOCOLS["opencode-go"] = ("openai", "anthropic")
 
 
 class Settings(BaseModel):
     # --- Provider selection ---
-    # "zai" (default) | "opencode-go"
+    # "zai" (default); "opencode-go" too while capabilities.OPENCODE_GO_ENABLED is on.
     # Environment wins, then the provider chosen in setup, then Z.AI.
     llm_provider: str = os.getenv("LLM_PROVIDER") or userconfig.provider() or "zai"
     # "" lets each provider pick its default. Override with "openai" or "anthropic".
@@ -189,6 +191,13 @@ class Settings(BaseModel):
             # catch site — check_config, the REPL, resynthesize — handles a
             # typo'd provider uniformly instead of some leaking a traceback.
             from .capabilities import CapabilityViolation
+            if self.llm_provider == "opencode-go":
+                # Left over from before it was switched off (the env var, or the
+                # provider saved by setup): say what to do instead of "unknown".
+                raise CapabilityViolation(
+                    "OpenCode Go is switched off for now; Z.AI is the only supported provider. "
+                    "Run `synapse-deep-research setup` to switch (or set LLM_PROVIDER=zai)."
+                )
             raise CapabilityViolation(
                 f"Unknown LLM_PROVIDER '{self.llm_provider}'. "
                 f"Supported: {', '.join(_PROVIDER_PROTOCOLS)}"
@@ -277,7 +286,7 @@ class Settings(BaseModel):
         # so explicit constructor args (used by tests) win.
         pairs = (
             ("zai_api_key",               "ZAI_API_KEY"),
-            ("opencode_api_key",          "OPENCODE_API_KEY"),
+            *((("opencode_api_key",       "OPENCODE_API_KEY"),) if OPENCODE_GO_ENABLED else ()),
             ("tavily_api_key",            "TAVILY_API_KEY"),
             ("semantic_scholar_api_key",  "SEMANTIC_SCHOLAR_API_KEY"),
         )

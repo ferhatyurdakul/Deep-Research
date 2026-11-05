@@ -73,6 +73,14 @@ class CapabilityViolation(ValueError):
     """Raised when a configured provider/model/family combination is invalid."""
 
 
+# OpenCode Go is switched off for now: Z.AI is the only provider we ship and
+# OpenCode Go's model list is out of date. Everything specific to it (models,
+# recommended models, the provider itself, its managed API key, the setup
+# choice) is gated on this one flag, and the tests that need it skip while it is
+# False. To bring it back, refresh the model list below, set this to True and
+# restore its docs (README, .env.example) from git history.
+OPENCODE_GO_ENABLED = False
+
 # Per the official OpenCode Go docs (https://opencode.ai/docs/go/), models are
 # split by which endpoint they're reachable through:
 #   - /chat/completions (OpenAI-compat) handles GLM, Kimi, MiMo, Qwen, DeepSeek
@@ -161,7 +169,7 @@ _OPENCODE_GO_MODELS: tuple[tuple[str, "frozenset", "Optional[bool]", str, str, s
         "Routed through OpenCode Go /messages (Anthropic-compat)."),
 )
 
-for _mid, _families, _thinking, _dialect, _tier, _notes in _OPENCODE_GO_MODELS:
+for _mid, _families, _thinking, _dialect, _tier, _notes in (_OPENCODE_GO_MODELS if OPENCODE_GO_ENABLED else ()):
     _register(ModelCapability(
         provider="opencode-go",
         model_id=_mid,
@@ -211,13 +219,14 @@ RECOMMENDED_STAGE_MODELS: dict[str, StageModels] = {
         gap_analysis="glm-5.3",
         synthesize="glm-5.3",
     ),
-    "opencode-go": StageModels(
+}
+if OPENCODE_GO_ENABLED:
+    RECOMMENDED_STAGE_MODELS["opencode-go"] = StageModels(
         decompose="glm-5.1",
         analyze="glm-5.1",
         gap_analysis="glm-5.1",
         synthesize="glm-5.1",
-    ),
-}
+    )
 
 
 def recommended_stage_models(provider: str) -> StageModels:

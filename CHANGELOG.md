@@ -15,6 +15,11 @@
 - A missing API key with no terminal is now reported as an error with the fix next to it (`synapse-deep-research setup`, or set the variable) rather than a warning followed by a note.
 - The one-time carry-over notice from the old name now goes to stderr, so it can never land in front of the JSON.
 
+### Breaking — OpenCode Go is switched off for now
+
+- **Z.AI is the only provider for now.** OpenCode Go's model list was out of date and is not being refreshed yet, so it is off rather than half-working: it is gone from the setup screen, `/provider`, the stored keys (`OPENCODE_API_KEY`), `.env.example` and the docs. The code is still there behind one switch (`OPENCODE_GO_ENABLED` in `capabilities.py`) and comes back when it is refreshed.
+- If `LLM_PROVIDER=opencode-go` is set, or setup saved it as your provider, runs stop with a message that says so and how to switch (`synapse-deep-research setup`, or `LLM_PROVIDER=zai`). A key you already stored for it is left in your keyring, untouched. Nothing else changes for Z.AI.
+
 ### Breaking — renamed to Synapse Deep Research
 
 - **The tool is now Synapse Deep Research.** The package and the command are `synapse-deep-research` (was `deep-research`) and the Python module is `synapse_deep_research`. The old command is gone, not kept as an alias: `pipx uninstall deep-research`, then install the new name.
@@ -25,7 +30,7 @@
 
 ### Breaking — models are chosen per stage; route profiles are gone
 
-- **`LLM_ROUTE` and `/route` are removed**, along with the `balanced` / `budget` / `quality` presets. You now choose the model for each pipeline stage (decompose, analyze, gap_analysis, synthesize) yourself — in the new setup screen, or any time with `/model` — and the choice is saved to `~/.config/deep-research/config.json` (`DEEP_RESEARCH_CONFIG_FILE` overrides the path). Per stage the model comes from, in order: a `MODEL_<STAGE>` environment variable, what you saved, then the provider's recommendation (Z.AI: `glm-5.3-flash` for decompose/analyze, `glm-5.3` for gap_analysis/synthesize; OpenCode Go: `glm-5.1` everywhere). A leftover `LLM_ROUTE` is ignored with a one-time warning. `deep-research status` and `/status` show where each stage's model comes from. The Python API changes accordingly: `RECOMMENDED_ROUTES`, `known_profiles`, `resolve_stage_route` and `Settings.llm_route` are replaced by `recommended_stage_models()` and `Settings.stage_sources()`.
+- **`LLM_ROUTE` and `/route` are removed**, along with the `balanced` / `budget` / `quality` presets. You now choose the model for each pipeline stage (decompose, analyze, gap_analysis, synthesize) yourself — in the new setup screen, or any time with `/model` — and the choice is saved to `~/.config/deep-research/config.json` (`DEEP_RESEARCH_CONFIG_FILE` overrides the path). Per stage the model comes from, in order: a `MODEL_<STAGE>` environment variable, what you saved, then the provider's recommendation (Z.AI: `glm-5.3-flash` for decompose/analyze, `glm-5.3` for gap_analysis/synthesize). A leftover `LLM_ROUTE` is ignored with a one-time warning. `deep-research status` and `/status` show where each stage's model comes from. The Python API changes accordingly: `RECOMMENDED_ROUTES`, `known_profiles`, `resolve_stage_route` and `Settings.llm_route` are replaced by `recommended_stage_models()` and `Settings.stage_sources()`.
 - **`/model` now saves** instead of lasting only for the session (that was the only way to keep a choice before; now it is the way to make one). It also gains an `other` entry to type any model ID, and `default` means "back to the recommendation".
 - **`/provider` saves the provider** too, so the app opens on the one you last chose (`LLM_PROVIDER` in the environment still wins).
 
@@ -44,7 +49,7 @@
 ### Changed — Z.AI model list and default `glm-5.3`
 
 - The registry now matches Z.AI's current lineup (checked 2026-10-25): `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx`, `glm-5.2`, `glm-5.1` are offered; `glm-5` and `glm-4.5-air` stay registered (existing configs keep validating) but are no longer listed. `glm-5.3`, `glm-5.3-flash`, `glm-5.2` and `glm-5.1` are production tier (each answered a live call, with and without thinking); `glm-5.3-flashx` stays experimental because a Coding Plan account is refused (error 1311) despite it being in the account's model list. Models carry a `listed` flag for this.
-- `GLM_MODEL` now defaults to `glm-5.3`. A `GLM_MODEL` or `MODEL_*` you have set yourself keeps winning. OpenCode Go's list and defaults are unchanged (to be refreshed separately).
+- `GLM_MODEL` now defaults to `glm-5.3`. A `GLM_MODEL` or `MODEL_*` you have set yourself keeps winning.
 
 
 ### Changed — CLI redesign

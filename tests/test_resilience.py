@@ -131,6 +131,7 @@ class TestRetryAndFallback:
         # All attempts were exhausted before giving up.
         assert comp.calls == llm._MAX_ATTEMPTS
 
+    @pytest.mark.opencode_go
     @pytest.mark.asyncio
     async def test_swaps_to_fallback_provider(self, fast_retries, monkeypatch):
         llm = fast_retries
@@ -328,6 +329,7 @@ class TestConfigLimits:
 
 
 class TestFallbackModelRouting:
+    @pytest.mark.opencode_go
     @pytest.mark.asyncio
     async def test_swapped_provider_drops_foreign_stage_models(self, monkeypatch):
         """After a mid-run opencode-go → zai swap, a stage model registered

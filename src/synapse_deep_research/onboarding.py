@@ -19,7 +19,7 @@ from rich.markup import escape
 from rich.text import Text
 
 from . import userconfig
-from .capabilities import PIPELINE_STAGES, recommended_stage_models
+from .capabilities import OPENCODE_GO_ENABLED, PIPELINE_STAGES, recommended_stage_models
 from .config import _PROVIDER_PROTOCOLS, settings
 from .credentials import get_credential, keyring_backend_name, set_credential
 from .interactive import ask_text, pick_option
@@ -29,10 +29,12 @@ from .ui import console, fail, glyph, kv_grid, note, panel, short_path, tty, war
 
 PROVIDER_CHOICES = [
     ("zai", "Z.AI — GLM models"),
-    ("opencode-go", "OpenCode Go — GLM, Kimi, DeepSeek, Qwen (model list not refreshed yet)"),
+    *([("opencode-go", "OpenCode Go — GLM, Kimi, DeepSeek, Qwen (model list not refreshed yet)")]
+      if OPENCODE_GO_ENABLED else []),
 ]
 _PROVIDER_NAMES = {"zai": "Z.AI", "opencode-go": "OpenCode Go"}
 _KEY_ENV = {"zai": "ZAI_API_KEY", "opencode-go": "OPENCODE_API_KEY"}
+_KEY_HINT = "ZAI_API_KEY" + (" (or OPENCODE_API_KEY)" if OPENCODE_GO_ENABLED else "")
 STEPS = 5
 
 
@@ -107,7 +109,7 @@ def run_setup(*, first_run: bool = False) -> bool:
     if not tty():
         fail(
             "Setup needs an interactive terminal.",
-            hint="Set ZAI_API_KEY (or OPENCODE_API_KEY) in the environment or a .env file instead.",
+            hint=f"Set {_KEY_HINT} in the environment or a .env file instead.",
         )
         return False
 
