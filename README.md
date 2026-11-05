@@ -9,6 +9,25 @@ Use it two ways:
 - **Yourself**, from the terminal: `synapse-deep-research "your question"`.
 - **From your coding agent.** Install the skill once and Claude Code, Codex, Hermes and others can hand a research question to Synapse, keep working, and read the finished report when it is ready. See [Use it from your coding agent](#use-it-from-your-coding-agent).
 
+## Quick start
+
+**1. Install the tool and give it your model key (once):**
+
+```bash
+pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
+synapse-deep-research setup
+```
+
+**2. Teach your coding agents to use it (optional):**
+
+```bash
+synapse-deep-research skills install
+```
+
+That is all. Ask for research yourself (`synapse-deep-research "your question"`), or ask your agent for a deep, sourced investigation and it runs the tool for you.
+
+The skill is bundled with the tool rather than being a separate download, and it does nothing without the tool installed, because the agent runs the `synapse-deep-research` command. Bundling also means the installed skill always matches the installed version. To copy it by hand instead, take [`SKILL.md`](src/synapse_deep_research/skill/SKILL.md) and put it in a folder named `synapse-deep-research` inside your agent's skills folder, for example `~/.claude/skills/synapse-deep-research/SKILL.md`. Other agents, folders and options are under [Use it from your coding agent](#use-it-from-your-coding-agent).
+
 ## What It Does
 
 Give it a question. It breaks it into sub-questions, searches the web and paper databases (arXiv, Semantic Scholar) in parallel, reads and analyzes each source, identifies what's missing, searches again, and produces a structured report with inline citations traced back to specific sources.
@@ -105,7 +124,7 @@ Inside the REPL, the same commands are available as slash commands: `/setup`, `/
 
 ### Use it from your coding agent
 
-With the tool installed and configured, one command teaches your other coding agents to use it:
+Once the tool is installed and set up (see [Quick start](#quick-start)), one command teaches your other coding agents to use it:
 
 ```bash
 synapse-deep-research skills install
@@ -140,6 +159,7 @@ synapse-deep-research skills uninstall
 - An agent that is already running may need a new session, or its skills reload command, to see the skill. Hermes loads project-level skills only after `hermes skills trust`.
 - The agent runs the tool as you, with your key. You set the key up once with `synapse-deep-research setup`, and the skill tells agents never to ask for a key in the chat.
 - Agents call it with `--json` ([details](#scripts-and-agents---json)), so a run ends as one line of JSON plus a Markdown report on disk.
+- The agent picks the depth, template and report style from your question and tells you what it chose. Say what you want ("a quick look", "go deep", "keep it brief", "as a literature review") and it uses that instead.
 
 ### Where files live
 

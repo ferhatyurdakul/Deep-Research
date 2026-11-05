@@ -17,7 +17,8 @@ from synapse_deep_research import main as main_mod
 from synapse_deep_research import views
 from synapse_deep_research.cli_help import INDEX
 from synapse_deep_research.models import ResearchConfig, ResearchDepth, ResearchReport
-from synapse_deep_research.options import DEPTH_VALUES, STYLE_VALUES, TEMPLATE_VALUES
+from synapse_deep_research.options import DEPTH_VALUES, STYLE_VALUES, TEMPLATE_VALUES, style_choices
+from synapse_deep_research.pipeline.templates import TEMPLATES
 
 PROG = "synapse-deep-research"
 
@@ -92,3 +93,41 @@ class TestAgainstTheCli:
             ResearchReport(query="q"), session_id=1, path=tmp_path / "r.md", depth="quick",
         )
         assert set(shown) == set(real)
+
+
+def _choices_for(text: str, flag: str) -> str:
+    """The part of 'Choose the options yourself' that covers one flag."""
+    match = re.search(rf"\*\*`{flag}`\*\*.*?(?=\n\*\*`--|\n## |\Z)", text, re.DOTALL)
+    assert match, f"SKILL.md has no guidance for {flag}"
+    return match.group(0)
+
+
+def _bullet(section: str, value: str) -> str:
+    return next(line for line in section.splitlines() if line.startswith(f"- `{value}`:"))
+
+
+class TestChoosingOptions:
+    """The agent picks depth, template and style from the question. What it is told about
+    each choice has to match what the choice really does."""
+
+    def test_the_run_command_does_not_hard_code_a_depth_or_style(self, skill_text):
+        command = re.search(rf"^{PROG} --json .*$", skill_text, re.MULTILINE).group(0)
+        assert "--depth <depth>" in command and "--style <style>" in command
+
+    @pytest.mark.parametrize("flag, values", [
+        ("--depth", DEPTH_VALUES), ("--template", TEMPLATE_VALUES), ("--style", STYLE_VALUES),
+    ])
+    def test_every_value_says_when_to_pick_it(self, skill_text, flag, values):
+        section = _choices_for(skill_text, flag)
+        for value in values:
+            assert _bullet(section, value)
+
+    @pytest.mark.parametrize("style, blurb", style_choices())
+    def test_the_report_lengths_are_the_real_ones(self, skill_text, style, blurb):
+        words = re.search(r"~([\d-]+) words", blurb).group(1)
+        assert words in _bullet(_choices_for(skill_text, "--style"), style)
+
+    @pytest.mark.parametrize("key, template", list(TEMPLATES.items()))
+    def test_it_says_which_templates_search_papers(self, skill_text, key, template):
+        line = _bullet(_choices_for(skill_text, "--template"), key)
+        assert ("research papers" in line) == template.use_academic

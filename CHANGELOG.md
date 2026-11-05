@@ -5,7 +5,7 @@
 
 ### New — an agent skill, so other coding agents can run Synapse for you
 
-- **`synapse-deep-research skills install`** copies a skill (a `SKILL.md` folder in the open Agent Skills format) into the coding agents it finds in your home folder, so Claude Code, Codex, Hermes, Gemini CLI, Cursor, GitHub Copilot and OpenCode can start a research run, keep working, and read the finished report. The skill tells them to use `--json`, to default to `--depth quick`, to ask before costly runs, and never to ask for an API key in the chat.
+- **`synapse-deep-research skills install`** copies a skill (a `SKILL.md` folder in the open Agent Skills format) into the coding agents it finds in your home folder, so Claude Code, Codex, Hermes, Gemini CLI, Cursor, GitHub Copilot and OpenCode can start a research run, keep working, and read the finished report. The skill tells them to use `--json`, to choose the depth, template and style from your question (unless you asked for specific ones) and say what they chose, to ask before `--agent` or repeating a question, and never to ask for an API key in the chat.
 - **`skills`** with no action lists the known agents and whether the skill is installed or outdated for each. `--agent`, `--project` (the project's folders instead of your home folder's), `--dir` (an agent that is not listed), `--dry-run` and `uninstall` are there too. Agents that read the same folder (`~/.agents/skills`) share one copy. Only the folder named `synapse-deep-research` is ever written or removed, and a symlink there is left alone.
 - The skill ships inside the package, so what gets installed always matches the installed version. Tests check it against the real flags, option values, depth presets and JSON keys, so it cannot quietly drift from the CLI.
 
