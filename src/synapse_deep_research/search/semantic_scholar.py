@@ -5,6 +5,7 @@ import logging
 
 import httpx
 
+from synapse_deep_research import __version__
 from synapse_deep_research.models import SearchResult, SourceType
 
 from .base import SearchProvider
@@ -26,7 +27,7 @@ class SemanticScholarProvider(SearchProvider):
 
     def _headers(self) -> dict[str, str]:
         headers: dict[str, str] = {
-            "User-Agent": "synapse-deep-research/0.3 (https://github.com/ferhatyurdakul/Deep-Research)"
+            "User-Agent": f"synapse-deep-research/{__version__} (https://github.com/ferhatyurdakul/synapse-deep-research)"
         }
         if self.api_key:
             headers["x-api-key"] = self.api_key

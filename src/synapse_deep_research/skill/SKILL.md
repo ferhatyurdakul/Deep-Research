@@ -9,7 +9,7 @@ A command-line research agent. It splits a question into sub-questions, searches
 
 ## Before you run it
 
-1. `synapse-deep-research --version`. If the command is not found, tell the user how to install it (`pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git`) and stop; do not install it yourself unasked.
+1. `synapse-deep-research --version`. If the command is not found, tell the user how to install it (`pipx install git+https://github.com/ferhatyurdakul/synapse-deep-research.git`) and stop; do not install it yourself unasked.
 2. It needs an API key that only the user can set up, with `synapse-deep-research setup` in their own terminal. If a run fails because the key is missing, tell them to run that. Never ask for a key in the chat or put one on a command line.
 3. Ask before `--agent` and before running the same question twice; both use a large share of the quota. Depth, template and style are your call (see below), so do not ask about those.
 

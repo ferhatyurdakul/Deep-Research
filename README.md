@@ -14,7 +14,7 @@ Use it two ways:
 **1. Install the tool and give it your model key (once):**
 
 ```bash
-pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
+pipx install git+https://github.com/ferhatyurdakul/synapse-deep-research.git
 synapse-deep-research setup
 ```
 
@@ -62,14 +62,14 @@ That's it. Web search works out of the box with DuckDuckGo (free, no key needed)
 **Recommended: pipx** — installs `synapse-deep-research` on your global PATH so you can run it from any directory without activating a venv.
 
 ```bash
-pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
+pipx install git+https://github.com/ferhatyurdakul/synapse-deep-research.git
 ```
 
 **For development** — editable install in a venv:
 
 ```bash
-git clone https://github.com/ferhatyurdakul/Deep-Research.git
-cd Deep-Research
+git clone https://github.com/ferhatyurdakul/synapse-deep-research.git
+cd synapse-deep-research
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -79,7 +79,7 @@ pip install -e ".[dev]"
 
 ```bash
 pipx uninstall deep-research
-pipx install git+https://github.com/ferhatyurdakul/Deep-Research.git
+pipx install git+https://github.com/ferhatyurdakul/synapse-deep-research.git
 ```
 
 The first launch copies your settings, session history and stored API keys from the old install, and leaves the old copies where they were (macOS may ask once to let the new install read the old Keychain entries). Scripts need the new names: the `deep-research` command is now `synapse-deep-research`, and `DEEP_RESEARCH_*` variables are now `SYNAPSE_DEEP_RESEARCH_*`.

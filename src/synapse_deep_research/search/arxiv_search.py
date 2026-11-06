@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 import httpx
 
+from synapse_deep_research import __version__
 from synapse_deep_research.models import SearchResult, SourceType
 
 from .base import SearchProvider
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 ARXIV_API = "https://export.arxiv.org/api/query"
 
 # arXiv's export API rejects requests without a descriptive User-Agent.
-_HEADERS = {"User-Agent": "synapse-deep-research/0.3 (https://github.com/ferhatyurdakul/Deep-Research)"}
+_HEADERS = {"User-Agent": f"synapse-deep-research/{__version__} (https://github.com/ferhatyurdakul/synapse-deep-research)"}
 
 
 def _parse_arxiv_entry(entry: ET.Element, ns: dict) -> SearchResult | None:
