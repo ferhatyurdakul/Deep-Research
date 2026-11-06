@@ -10,16 +10,19 @@ import tempfile
 
 import pytest
 
-from synapse_deep_research.capabilities import OPENCODE_GO_ENABLED
-
 # Module level: Settings reads the saved provider at import time, before any
 # fixture has run.
 os.environ["SYNAPSE_DEEP_RESEARCH_CONFIG_FILE"] = os.path.join(tempfile.mkdtemp(prefix="dr-test-config-"), "config.json")
+
+from synapse_deep_research.capabilities import OPENCODE_GO_ENABLED  # noqa: E402 - after the override above
 
 
 @pytest.fixture(autouse=True)
 def _isolated_user_config(tmp_path, monkeypatch):
     monkeypatch.setenv("SYNAPSE_DEEP_RESEARCH_CONFIG_FILE", str(tmp_path / "user-config" / "config.json"))
+    # The REPL keeps its input history under the XDG config folder; without this the
+    # REPL tests append to the real ~/.config/synapse-deep-research/repl_history.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 
 
 class FakeKeyring:
