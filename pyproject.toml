@@ -1,7 +1,7 @@
 [project]
-name = "deep-research"
-version = "0.4.0"
-description = "AI-powered deep research CLI using Z.AI GLM and OpenCode Go models"
+name = "synapse-deep-research"
+version = "1.0.0"
+description = "AI-powered deep research CLI using Z.AI GLM models"
 requires-python = ">=3.9"
 dependencies = [
     "openai>=1.0.0",
@@ -15,6 +15,7 @@ dependencies = [
     "tenacity>=8.2.0",
     "pymupdf>=1.24.0",
     "ddgs>=9.0.0",
+    "prompt-toolkit>=3.0.0",
     "keyring>=24.0",
 ]
 
@@ -25,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-deep-research = "deep_research.main:main"
+synapse-deep-research = "synapse_deep_research.entry:run"
 
 [build-system]
 requires = ["setuptools>=68.0"]
@@ -34,6 +35,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The skill that `synapse-deep-research skills install` copies into other agents.
+[tool.setuptools.package-data]
+synapse_deep_research = ["skill/*.md"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
+markers = ["opencode_go: needs OpenCode Go; skipped while capabilities.OPENCODE_GO_ENABLED is False"]
 testpaths = ["tests"]

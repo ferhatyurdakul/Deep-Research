@@ -1,0 +1,424 @@
+from __future__ import annotations
+
+import logging
+import os
+import warnings
+from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
+from pydantic import BaseModel
+
+from . import userconfig
+from .capabilities import OPENCODE_GO_ENABLED
+
+logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# --- .env discovery -----------------------------------------------------
+# Prefer a project-local .env (cwd or above) so dev workflow is unchanged.
+# Fall back to ~/.config/synapse-deep-research/.env so a pipx-installed CLI works
+# from any directory without exporting credentials in the shell profile.
+def _xdg_config_home() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")))
+
+
+def _xdg_data_home() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")))
+
+
+def _int_env(name: str, default: int) -> int:
+    """Parse an int env var, falling back to `default` on missing/invalid input."""
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r (expected an integer); using %d.", name, raw, default)
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "")
+    if not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r (expected a number); using %s.", name, raw, default)
+        return default
+
+
+_dotenv_path = find_dotenv(usecwd=True)
+if _dotenv_path:
+    load_dotenv(_dotenv_path)
+else:
+    _global_env = _xdg_config_home() / "synapse-deep-research" / ".env"
+    if _global_env.exists():
+        load_dotenv(_global_env)
+
+
+# --- Filesystem paths ---------------------------------------------------
+# DATA_DIR holds the SQLite session DB. Lives under XDG_DATA_HOME by default
+# so a pipx-installed CLI doesn't lose state when the venv is rebuilt.
+# Override with SYNAPSE_DEEP_RESEARCH_DATA_DIR to keep state next to the source
+# (handy during development).
+DATA_DIR = Path(
+    os.environ.get(
+        "SYNAPSE_DEEP_RESEARCH_DATA_DIR",
+        str(_xdg_data_home() / "synapse-deep-research"),
+    )
+)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "research.db"
+
+# OUTPUTS_DIR is where saved markdown reports land. Defaults to cwd so the
+# user can `cd ~/work && synapse-deep-research "..."` and find the report next to
+# their other files. Override with SYNAPSE_DEEP_RESEARCH_OUTPUTS_DIR. The directory
+# is *not* created at import time (we don't want every CLI invocation in
+# every directory to leave an empty `outputs/` behind) — see
+# output/report.py:save_report which mkdirs on demand.
+OUTPUTS_DIR = Path(
+    os.environ.get(
+        "SYNAPSE_DEEP_RESEARCH_OUTPUTS_DIR",
+        str(Path.cwd() / "outputs"),
+    )
+)
+
+
+# --- Migration notice ---------------------------------------------------
+# v0.2.0 moved DATA_DIR from <repo>/data/ to ~/.local/share/synapse-deep-research/.
+# If the old DB exists and the new one doesn't, point users at the move
+# so they don't think their history vanished.
+_legacy_db = PROJECT_ROOT / "data" / "research.db"
+if _legacy_db.exists() and not DB_PATH.exists() and _legacy_db != DB_PATH:
+    warnings.warn(
+        f"Legacy session DB found at {_legacy_db}. v0.2.0+ stores sessions at {DB_PATH}. "
+        f"Move the file to keep your history, or set SYNAPSE_DEEP_RESEARCH_DATA_DIR={_legacy_db.parent} "
+        f"to keep using the old location.",
+        stacklevel=2,
+    )
+
+# Supported provider families and their endpoint protocols.
+# A provider family is a vendor; an endpoint family is a wire protocol.
+# OpenCode Go publishes both an OpenAI-compatible and an Anthropic-compatible
+# endpoint, so it can be paired with either family at runtime.
+_PROVIDER_PROTOCOLS: dict[str, tuple[str, ...]] = {
+    "zai": ("openai",),
+}
+if OPENCODE_GO_ENABLED:  # switched off for now, see capabilities.OPENCODE_GO_ENABLED
+    _PROVIDER_PROTOCOLS["opencode-go"] = ("openai", "anthropic")
+
+
+class Settings(BaseModel):
+    # --- Provider selection ---
+    # "zai" (default); "opencode-go" too while capabilities.OPENCODE_GO_ENABLED is on.
+    # Environment wins, then the provider chosen in setup, then Z.AI.
+    llm_provider: str = os.getenv("LLM_PROVIDER") or userconfig.provider() or "zai"
+    # "" lets each provider pick its default. Override with "openai" or "anthropic".
+    llm_endpoint_family: str = os.getenv("LLM_ENDPOINT_FAMILY", "")
+
+    # --- Z.AI provider (existing) ---
+    zai_api_key: str = os.getenv("ZAI_API_KEY", "")
+    zai_base_url: str = os.getenv("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
+    glm_model: str = os.getenv("GLM_MODEL", "glm-5.3")
+
+    # --- OpenCode Go provider ---
+    opencode_api_key: str = os.getenv("OPENCODE_API_KEY", "")
+    opencode_base_url: str = os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/go/v1")
+    opencode_model: str = os.getenv("OPENCODE_MODEL", "glm-5.1")
+
+    # --- Other settings ---
+    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
+    semantic_scholar_api_key: str = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+    default_depth: str = os.getenv("RESEARCH_DEPTH", "standard")
+    # (Depth/shape defaults live on ResearchConfig.from_depth presets; only
+    # the *_override fields below are consumed here.)
+
+    # --- Concurrency & budget knobs -------------------------------------
+    # These cap how bursty a run is.
+    #
+    # Concurrent in-flight LLM calls during source analysis. The analyzer
+    # fans out one analyze (+summary +extract) chain per source; this is the
+    # ceiling on how many run at once. Default 2: the default provider (Z.AI
+    # GLM coding plan) enforces a low per-plan concurrency cap that surfaces
+    # as 429s, so a wider fan-out mostly generates retries. Raise it (3-5)
+    # only on providers with real headroom.
+    max_llm_concurrency: int = _int_env("MAX_LLM_CONCURRENCY", 2)
+    # Gentler default applied in --agent mode, which issues extra
+    # decision/gap calls on top of analysis. Capped by max_llm_concurrency.
+    agent_max_llm_concurrency: int = _int_env("AGENT_MAX_LLM_CONCURRENCY", 3)
+    # Concurrent search/extraction HTTP requests across all providers.
+    max_search_concurrency: int = _int_env("MAX_SEARCH_CONCURRENCY", 5)
+
+    # Retry/backoff for transient and rate-limit errors. Rate limits get a
+    # longer base wait (see llm._wait_strategy); jitter is always applied.
+    llm_max_retries: int = max(1, _int_env("LLM_MAX_RETRIES", 5))
+    llm_retry_base_seconds: float = max(0.0, _float_env("LLM_RETRY_BASE_SECONDS", 2.0))
+    llm_retry_max_seconds: float = max(0.0, _float_env("LLM_RETRY_MAX_SECONDS", 60.0))
+
+    # Optional research-shape overrides. 0 / unset = use the --depth preset.
+    max_sub_questions_override: int = _int_env("MAX_SUB_QUESTIONS", 0)
+    max_search_results_override: int = _int_env("MAX_SEARCH_RESULTS", 0)
+    max_iterations_override: int = _int_env("MAX_ITERATIONS", 0)
+    max_sources_override: int = _int_env("MAX_SOURCES", 0)
+
+    # Agent-mode iteration budgets per depth. 0 = use the built-in default
+    # (quick 3 / standard 5 / deep 8), always capped at MAX_AGENT_ITERATIONS.
+    agent_budget_quick: int = _int_env("AGENT_BUDGET_QUICK", 0)
+    agent_budget_standard: int = _int_env("AGENT_BUDGET_STANDARD", 0)
+    agent_budget_deep: int = _int_env("AGENT_BUDGET_DEEP", 0)
+
+    # Fallback provider when the primary trips a rate-limit / subscription cap.
+    # Empty = no fallback (raise a clear error and abort the run).
+    # Setting it to another configured provider (e.g. "zai" while primary is
+    # "opencode-go") makes Synapse Deep Research swap providers for the rest of the
+    # process after a 429 is observed.
+    llm_fallback_provider: str = os.getenv("LLM_FALLBACK_PROVIDER", "")
+
+    # Per-stage model overrides from the environment (MODEL_<STAGE>). Empty =
+    # use what was saved in setup / `/model`, else the recommended model.
+    model_decompose: str = os.getenv("MODEL_DECOMPOSE", "")
+    model_analyze: str = os.getenv("MODEL_ANALYZE", "")
+    model_synthesize: str = os.getenv("MODEL_SYNTHESIZE", "")
+    model_gap_analysis: str = os.getenv("MODEL_GAP_ANALYSIS", "")
+
+    @property
+    def active_provider(self) -> str:
+        if self.llm_provider not in _PROVIDER_PROTOCOLS:
+            # CapabilityViolation (a ValueError subclass) so every existing
+            # catch site — check_config, the REPL, resynthesize — handles a
+            # typo'd provider uniformly instead of some leaking a traceback.
+            from .capabilities import CapabilityViolation
+            if self.llm_provider == "opencode-go":
+                # Left over from before it was switched off (the env var, or the
+                # provider saved by setup): say what to do instead of "unknown".
+                raise CapabilityViolation(
+                    "OpenCode Go is switched off for now; Z.AI is the only supported provider. "
+                    "Run `synapse-deep-research setup` to switch (or set LLM_PROVIDER=zai)."
+                )
+            raise CapabilityViolation(
+                f"Unknown LLM_PROVIDER '{self.llm_provider}'. "
+                f"Supported: {', '.join(_PROVIDER_PROTOCOLS)}"
+            )
+        return self.llm_provider
+
+    @property
+    def active_endpoint_family(self) -> str:
+        from .capabilities import CapabilityViolation
+
+        supported = _PROVIDER_PROTOCOLS[self.active_provider]
+        if self.llm_endpoint_family:
+            if self.llm_endpoint_family not in supported:
+                raise CapabilityViolation(
+                    f"Provider '{self.active_provider}' does not support endpoint family "
+                    f"'{self.llm_endpoint_family}'. Supported: {', '.join(supported)}"
+                )
+            return self.llm_endpoint_family
+        return supported[0]
+
+    @property
+    def active_api_key(self) -> str:
+        return {
+            "zai": self.zai_api_key,
+            "opencode-go": self.opencode_api_key,
+        }[self.active_provider]
+
+    @property
+    def active_base_url(self) -> str:
+        return {
+            "zai": self.zai_base_url,
+            "opencode-go": self.opencode_base_url,
+        }[self.active_provider]
+
+    @property
+    def active_model(self) -> str:
+        return {
+            "zai": self.glm_model,
+            "opencode-go": self.opencode_model,
+        }[self.active_provider]
+
+    @property
+    def active_api_key_env_name(self) -> str:
+        return {
+            "zai": "ZAI_API_KEY",
+            "opencode-go": "OPENCODE_API_KEY",
+        }[self.active_provider]
+
+    @property
+    def effective_endpoint_family(self) -> str:
+        """
+        The endpoint family that will actually be used at call time.
+
+        Differs from `active_endpoint_family` (which is just the user override
+        or the provider-level default) by consulting per-model constraints from
+        the capability map. For example, OpenCode Go's MiniMax models are
+        Anthropic-only even though the provider supports both protocols.
+
+        Falls back to `active_endpoint_family` on any unexpected error so the
+        property never hard-fails just to populate a banner.
+        """
+        try:
+            from .capabilities import resolve_endpoint_family
+            return resolve_endpoint_family(
+                self.active_provider,
+                self.active_model,
+                self.llm_endpoint_family or None,
+            )
+        except Exception:
+            return self.active_endpoint_family
+
+    def model_post_init(self, __context) -> None:
+        """
+        Fill empty managed credentials from the OS keyring.
+
+        Resolution priority (highest → lowest):
+          1. Environment variable / project .env / global .env  (already in the
+             field at construction time because load_dotenv populates os.environ).
+          2. OS keyring (populated by `synapse-deep-research setup` or REPL /login).
+
+        Both options stay available so CI/scripts can override per-run and
+        keyring is the unattended default for installed CLI use.
+        """
+        from .credentials import get_credential
+        # Iterate over (field_name, keyring_key) pairs. Only fill when empty
+        # so explicit constructor args (used by tests) win.
+        pairs = (
+            ("zai_api_key",               "ZAI_API_KEY"),
+            *((("opencode_api_key",       "OPENCODE_API_KEY"),) if OPENCODE_GO_ENABLED else ()),
+            ("tavily_api_key",            "TAVILY_API_KEY"),
+            ("semantic_scholar_api_key",  "SEMANTIC_SCHOLAR_API_KEY"),
+        )
+        for field, key in pairs:
+            if not getattr(self, field, ""):
+                stored = get_credential(key)
+                if stored:
+                    object.__setattr__(self, field, stored)
+
+    def reload_credentials(self) -> None:
+        """
+        Re-read managed credentials from the keyring. Call after `/login` /
+        `/logout` so a running REPL session picks up the change without
+        restarting. Does not touch fields whose values came from env/.env —
+        we only refresh from the keyring source.
+        """
+        from .credentials import get_credential, MANAGED_KEY_NAMES
+        env_name_to_field = {
+            "ZAI_API_KEY": "zai_api_key",
+            "OPENCODE_API_KEY": "opencode_api_key",
+            "TAVILY_API_KEY": "tavily_api_key",
+            "SEMANTIC_SCHOLAR_API_KEY": "semantic_scholar_api_key",
+        }
+        for key in MANAGED_KEY_NAMES:
+            field = env_name_to_field.get(key)
+            if field is None:
+                continue
+            # Only overwrite from keyring if the current value isn't from env.
+            # Env values stick (highest priority); keyring fills/refreshes the rest.
+            if os.getenv(key):
+                continue
+            object.__setattr__(self, field, get_credential(key) or "")
+
+    def stage_models(self) -> dict[str, str]:
+        """Return non-empty per-stage env overrides only (no saved or recommended fill-in)."""
+        return {
+            stage: model
+            for stage, model in (
+                ("decompose", self.model_decompose),
+                ("analyze", self.model_analyze),
+                ("synthesize", self.model_synthesize),
+                ("gap_analysis", self.model_gap_analysis),
+            )
+            if model
+        }
+
+    def effective_stage_models(self) -> dict[str, str]:
+        """
+        The model each pipeline stage will use. Per stage, in order of priority:
+        a MODEL_<STAGE> environment override, the model saved by setup or
+        `/model`, then the provider's recommended model. Raises
+        CapabilityViolation for an unknown provider.
+        """
+        from .capabilities import PIPELINE_STAGES, recommended_stage_models
+
+        provider = self.active_provider
+        recommended = recommended_stage_models(provider).as_dict()
+        saved = userconfig.stage_models(provider)
+        override = self.stage_models()
+        return {
+            stage: override.get(stage) or saved.get(stage) or recommended[stage]
+            for stage in PIPELINE_STAGES
+        }
+
+    def stage_sources(self) -> dict[str, str]:
+        """Where each stage's model comes from: "environment", "saved" or "recommended"."""
+        from .capabilities import PIPELINE_STAGES
+
+        saved = userconfig.stage_models(self.active_provider)
+        override = self.stage_models()
+        return {
+            stage: "environment" if stage in override else "saved" if stage in saved else "recommended"
+            for stage in PIPELINE_STAGES
+        }
+
+    def validate_routes(self) -> dict[str, object]:
+        """
+        Verify every configured (provider, model, endpoint_family) combination.
+
+        Called at startup before expensive research runs. Raises
+        capabilities.CapabilityViolation on a hard incompatibility; warnings
+        for unknown-but-not-forbidden models are emitted via the logger.
+
+        Returns a debug dict describing the routing decision for logging.
+        """
+        # Imported lazily to avoid a circular import: capabilities.py is a leaf
+        # module that does not depend on config.
+        from .capabilities import (
+            describe_route, resolve_endpoint_family, validate_route,
+        )
+
+        # A typo'd LLM_FALLBACK_PROVIDER would otherwise surface as a
+        # CapabilityViolation mid-429-recovery, exactly when the fallback is
+        # supposed to save the run. Reject it at startup instead.
+        if self.llm_fallback_provider and self.llm_fallback_provider not in _PROVIDER_PROTOCOLS:
+            from .capabilities import CapabilityViolation
+            raise CapabilityViolation(
+                f"Unknown LLM_FALLBACK_PROVIDER '{self.llm_fallback_provider}'. "
+                f"Supported: {', '.join(_PROVIDER_PROTOCOLS)}"
+            )
+        provider = self.active_provider
+        family = resolve_endpoint_family(
+            provider, self.active_model, self.llm_endpoint_family or None,
+        )
+        # Ensure the resolved family is also one this provider supports
+        # at the wire-config level (the provider/protocol matrix).
+        supported = _PROVIDER_PROTOCOLS[provider]
+        if family not in supported:
+            from .capabilities import CapabilityViolation
+            raise CapabilityViolation(
+                f"Resolved endpoint family {family!r} is not enabled for provider "
+                f"{provider!r} in the protocol matrix. Enabled: {list(supported)}"
+            )
+
+        validate_route(provider, self.active_model, family)
+        # Validate every stage that will actually run (environment, saved and
+        # recommended models alike), not just the explicit env overrides.
+        stages = self.effective_stage_models()
+        for stage_model in stages.values():
+            # Stage models can route through their own family if it differs
+            # from the active model's (e.g. minimax-m2.7 → anthropic), so
+            # resolve their family individually before validating.
+            from .capabilities import resolve_endpoint_family
+            stage_family = resolve_endpoint_family(provider, stage_model, None)
+            validate_route(provider, stage_model, stage_family)
+
+        info = describe_route(
+            provider, self.active_model, family,
+            extra_models=stages.values(),
+        )
+        info["stages"] = stages
+        return info
+
+
+settings = Settings()

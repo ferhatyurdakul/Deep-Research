@@ -23,6 +23,14 @@ def _rate_limit_error(msg: str = "429 Too Many Requests") -> RateLimitError:
     return RateLimitError(msg, response=response, body=None)
 
 
+def _plan_lacks_model_error() -> RateLimitError:
+    """What Z.AI sends when the plan doesn't include a model: HTTP 429, code 1311."""
+    request = httpx.Request("POST", "https://api.z.ai/v1/chat/completions")
+    response = httpx.Response(429, request=request)
+    body = {"code": "1311", "message": "Your current subscription plan does not yet include access to GLM-5.3-FlashX"}
+    return RateLimitError("Error code: 429 - {'error': " + str(body) + "}", response=response, body=body)
+
+
 def _ok_response(content: str = "ok"):
     """Minimal stand-in for an OpenAI ChatCompletion response."""
     return SimpleNamespace(
@@ -48,7 +56,7 @@ class _FakeClient:
 @pytest.fixture
 def fast_retries(monkeypatch):
     """Zero out the backoff sleep so retry tests don't actually wait."""
-    import deep_research.llm as llm
+    import synapse_deep_research.llm as llm
     monkeypatch.setattr(llm._achat_inner.retry, "wait", wait_none())
     return llm
 
@@ -57,7 +65,7 @@ def fast_retries(monkeypatch):
 
 class TestWaitStrategy:
     def test_rate_limit_waits_longer_than_transient(self, monkeypatch):
-        import deep_research.llm as llm
+        import synapse_deep_research.llm as llm
         monkeypatch.setattr(llm.settings, "llm_retry_base_seconds", 2.0)
         monkeypatch.setattr(llm.settings, "llm_retry_max_seconds", 60.0)
 
@@ -76,7 +84,7 @@ class TestWaitStrategy:
             assert llm._wait_strategy(transient_state) <= 2.0
 
     def test_wait_is_capped(self, monkeypatch):
-        import deep_research.llm as llm
+        import synapse_deep_research.llm as llm
         monkeypatch.setattr(llm.settings, "llm_retry_base_seconds", 2.0)
         monkeypatch.setattr(llm.settings, "llm_retry_max_seconds", 10.0)
         state = SimpleNamespace(
@@ -123,6 +131,7 @@ class TestRetryAndFallback:
         # All attempts were exhausted before giving up.
         assert comp.calls == llm._MAX_ATTEMPTS
 
+    @pytest.mark.opencode_go
     @pytest.mark.asyncio
     async def test_swaps_to_fallback_provider(self, fast_retries, monkeypatch):
         llm = fast_retries
@@ -145,13 +154,60 @@ class TestRetryAndFallback:
         assert llm.settings.llm_provider == "opencode-go"
 
 
+class TestPlanLacksModel:
+    """A 429 that says the plan doesn't include the model never clears by waiting."""
+
+    def test_is_recognised_from_the_error_body(self):
+        import synapse_deep_research.llm as llm
+        assert llm._plan_lacks_model(_plan_lacks_model_error())
+        # the SDK may hand over the whole {"error": {...}} envelope
+        envelope = _plan_lacks_model_error()
+        envelope.body = {"error": envelope.body}
+        assert llm._plan_lacks_model(envelope)
+        assert not llm._plan_lacks_model(_rate_limit_error())
+        assert not llm._plan_lacks_model(TimeoutError("slow"))
+
+    def test_is_not_retried_but_real_rate_limits_are(self):
+        import synapse_deep_research.llm as llm
+        assert llm._should_retry(_rate_limit_error())
+        assert not llm._should_retry(_plan_lacks_model_error())
+
+    @pytest.mark.asyncio
+    async def test_fails_after_one_call_instead_of_burning_the_retry_budget(self, fast_retries, monkeypatch):
+        llm = fast_retries
+
+        def behavior(n, kwargs):
+            raise _plan_lacks_model_error()
+
+        comp = _FakeCompletions(behavior)
+        monkeypatch.setattr(llm, "get_async_client", lambda: _FakeClient(comp))
+        monkeypatch.setattr(llm.settings, "llm_fallback_provider", "")
+
+        with pytest.raises(llm.ProviderLimitExceeded) as caught:
+            await llm.achat("hello", model="glm-5.3-flashx")
+        assert comp.calls == 1
+        assert "does not yet include access" in str(caught.value)
+
+
+class TestRetryLogNamesTheRequestedModel:
+    def test_uses_the_model_argument_not_the_provider_default(self, monkeypatch):
+        import synapse_deep_research.llm as llm
+        monkeypatch.setattr(llm.settings, "glm_model", "glm-5.3")
+        positional = SimpleNamespace(args=("prompt", "system", "glm-5.3-flash", 0.2, False), kwargs={})
+        by_keyword = SimpleNamespace(args=("prompt", "system"), kwargs={"model": "glm-5.2"})
+        unset = SimpleNamespace(args=("prompt", "system", None, 0.2, False), kwargs={})
+        assert llm._requested_model(positional) == "glm-5.3-flash"
+        assert llm._requested_model(by_keyword) == "glm-5.2"
+        assert llm._requested_model(unset) == llm.settings.active_model
+
+
 # --- bounded search concurrency -------------------------------------------
 
 class TestSearchConcurrency:
     @pytest.mark.asyncio
     async def test_batch_search_respects_semaphore(self):
-        from deep_research.search.base import SearchProvider
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.base import SearchProvider
+        from synapse_deep_research.models import SearchResult, SourceType
 
         state = {"current": 0, "peak": 0}
 
@@ -176,7 +232,7 @@ class TestSearchConcurrency:
 class TestLLMConcurrency:
     @pytest.mark.asyncio
     async def test_set_llm_concurrency_resizes_semaphore(self):
-        from deep_research.pipeline import analyzer
+        from synapse_deep_research.pipeline import analyzer
 
         analyzer.set_llm_concurrency(2)
         assert analyzer._get_semaphore()._value == 2
@@ -190,13 +246,13 @@ class TestLLMConcurrency:
 class TestPartialSynthesis:
     @pytest.mark.asyncio
     async def test_synthesis_failure_returns_partial(self, monkeypatch):
-        import deep_research.pipeline.synthesizer as synth
+        import synapse_deep_research.pipeline.synthesizer as synth
 
         async def boom(*args, **kwargs):
             raise RuntimeError("provider rate-limited mid-synthesis")
 
         monkeypatch.setattr(synth, "asynthesize_report", boom)
-        from deep_research.models import SourceAnalysis
+        from synapse_deep_research.models import SourceAnalysis
         src = SourceAnalysis(url="https://a.com", title="A", key_findings=["f"])
         executive, detailed, follow_ups, ok = await synth.asynthesize_report_safe(
             "q", [], [src],
@@ -208,7 +264,7 @@ class TestPartialSynthesis:
 
     @pytest.mark.asyncio
     async def test_empty_sources_skips_llm_entirely(self, monkeypatch):
-        import deep_research.pipeline.synthesizer as synth
+        import synapse_deep_research.pipeline.synthesizer as synth
 
         async def boom(*args, **kwargs):
             raise AssertionError("LLM must not be called with zero sources")
@@ -223,13 +279,13 @@ class TestPartialSynthesis:
 
     @pytest.mark.asyncio
     async def test_synthesis_success_passes_through(self, monkeypatch):
-        import deep_research.pipeline.synthesizer as synth
+        import synapse_deep_research.pipeline.synthesizer as synth
 
         async def fine(*args, **kwargs):
             return ("## Executive Summary\nGood [1].", "## Findings\nx [1].", ["q1"])
 
         monkeypatch.setattr(synth, "asynthesize_report", fine)
-        from deep_research.models import SourceAnalysis
+        from synapse_deep_research.models import SourceAnalysis
         src = SourceAnalysis(url="https://a.com", title="A", key_findings=["f"])
         executive, detailed, follow_ups, ok = await synth.asynthesize_report_safe(
             "q", [], [src],
@@ -243,8 +299,8 @@ class TestPartialSynthesis:
 
 class TestConfigLimits:
     def test_apply_limits_overrides_shape(self, monkeypatch):
-        from deep_research.models import ResearchConfig, ResearchDepth
-        from deep_research.config import settings
+        from synapse_deep_research.models import ResearchConfig, ResearchDepth
+        from synapse_deep_research.config import settings
 
         monkeypatch.setattr(settings, "max_llm_concurrency", 9)
         monkeypatch.setattr(settings, "max_search_concurrency", 4)
@@ -260,9 +316,9 @@ class TestConfigLimits:
         assert cfg.max_sources == 30           # preset preserved
 
     def test_agent_budget_override(self, monkeypatch):
-        from deep_research.config import settings
-        from deep_research.models import ResearchDepth
-        from deep_research.pipeline.agent import agent_iteration_budget, MAX_AGENT_ITERATIONS
+        from synapse_deep_research.config import settings
+        from synapse_deep_research.models import ResearchDepth
+        from synapse_deep_research.pipeline.agent import agent_iteration_budget, MAX_AGENT_ITERATIONS
 
         monkeypatch.setattr(settings, "agent_budget_deep", 4)
         assert agent_iteration_budget(ResearchDepth.DEEP) == 4
@@ -273,12 +329,13 @@ class TestConfigLimits:
 
 
 class TestFallbackModelRouting:
+    @pytest.mark.opencode_go
     @pytest.mark.asyncio
     async def test_swapped_provider_drops_foreign_stage_models(self, monkeypatch):
         """After a mid-run opencode-go → zai swap, a stage model registered
         only under opencode-go must fall back to the zai default instead of
         being sent to a provider that will 400 it."""
-        import deep_research.llm as llm
+        import synapse_deep_research.llm as llm
 
         monkeypatch.setattr(llm.settings, "llm_provider", "opencode-go")
         monkeypatch.setattr(llm.settings, "opencode_api_key", "k1")
@@ -307,7 +364,7 @@ class TestFallbackModelRouting:
     @pytest.mark.asyncio
     async def test_swap_rejects_unconfigured_fallback_name(self, monkeypatch):
         """A fallback name that isn't a known provider never mutates state."""
-        import deep_research.llm as llm
+        import synapse_deep_research.llm as llm
 
         monkeypatch.setattr(llm.settings, "llm_provider", "zai")
         monkeypatch.setattr(llm.settings, "llm_fallback_provider", "not-a-provider")

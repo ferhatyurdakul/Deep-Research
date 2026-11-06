@@ -1,5 +1,100 @@
 # Changelog
 
+
+## v1.0.0 — 2026-11-06
+
+Synapse Deep Research 1.0. The project is renamed, and other coding agents can now drive it: an installable skill (`skills install`) and `--json` output let Claude Code, Codex, Hermes and others hand a research question to Synapse, keep working, and read the finished report. The CLI is redesigned, models are chosen per pipeline stage, and Z.AI is the only provider for now. Several changes are breaking, listed below.
+
+**Upgrading from `deep-research`:** `pipx uninstall deep-research`, then `pipx install git+https://github.com/ferhatyurdakul/synapse-deep-research.git`. Your settings, session history and stored keys are copied over on first launch, and the old copies are left in place.
+
+### New — an agent skill, so other coding agents can run Synapse for you
+
+- **`synapse-deep-research skills install`** copies a skill (a `SKILL.md` folder in the open Agent Skills format) into the coding agents it finds in your home folder, so Claude Code, Codex, Hermes, Gemini CLI, Cursor, GitHub Copilot and OpenCode can start a research run, keep working, and read the finished report. The skill tells them to use `--json`, to choose the depth, template and style from your question (unless you asked for specific ones) and say what they chose, to ask before `--agent` or repeating a question, and never to ask for an API key in the chat.
+- **`skills`** with no action lists the known agents and whether the skill is installed or outdated for each. `--agent`, `--project` (the project's folders instead of your home folder's), `--dir` (an agent that is not listed), `--dry-run` and `uninstall` are there too. Agents that read the same folder (`~/.agents/skills`) share one copy. Only the folder named `synapse-deep-research` is ever written or removed, and a symlink there is left alone.
+- The skill ships inside the package, so what gets installed always matches the installed version. Tests check it against the real flags, option values, depth presets and JSON keys, so it cannot quietly drift from the CLI.
+
+### New — `--json` for scripts and agents
+
+- **`--json`** on a one-shot run, `continue` and `resynthesize` prints one JSON object on stdout: the session id, the path of the saved Markdown report, the executive summary, follow-up questions and counts. The banner, progress and warnings go to stderr, and the report is not echoed. A failed run prints `{"ok": false, "error": …}` and exits non-zero. Without the flag nothing changes.
+- A missing API key with no terminal is now reported as an error with the fix next to it (`synapse-deep-research setup`, or set the variable) rather than a warning followed by a note.
+- The one-time carry-over notice from the old name now goes to stderr, so it can never land in front of the JSON.
+
+### Breaking — OpenCode Go is switched off for now
+
+- **Z.AI is the only provider for now.** OpenCode Go's model list was out of date and is not being refreshed yet, so it is off rather than half-working: it is gone from the setup screen, `/provider`, the stored keys (`OPENCODE_API_KEY`), `.env.example` and the docs. The code is still there behind one switch (`OPENCODE_GO_ENABLED` in `capabilities.py`) and comes back when it is refreshed.
+- If `LLM_PROVIDER=opencode-go` is set, or setup saved it as your provider, runs stop with a message that says so and how to switch (`synapse-deep-research setup`, or `LLM_PROVIDER=zai`). A key you already stored for it is left in your keyring, untouched. Nothing else changes for Z.AI.
+
+### Breaking — renamed to Synapse Deep Research
+
+- **The tool is now Synapse Deep Research.** The package and the command are `synapse-deep-research` (was `deep-research`) and the Python module is `synapse_deep_research`. The old command is gone, not kept as an alias: `pipx uninstall deep-research`, then install the new name.
+- **Your data is carried over on first launch.** Settings, the global `.env`, REPL history, the session database and the API keys stored under the old keyring service are copied to the new locations. Nothing is moved or deleted, so the old install keeps working until you remove it, and nothing already present under the new name is overwritten. It runs once, and not at all when `SYNAPSE_DEEP_RESEARCH_CONFIG_FILE` or `SYNAPSE_DEEP_RESEARCH_DATA_DIR` redirect where state lives.
+- **New locations:** `~/.config/synapse-deep-research/` (settings, `.env`, REPL history), `~/.local/share/synapse-deep-research/` (sessions), and the keyring service `synapse-deep-research`. The old `deep-research` folders and keyring entries are left alone; delete them when you are done with them.
+- **Environment variables:** `DEEP_RESEARCH_DATA_DIR`, `DEEP_RESEARCH_OUTPUTS_DIR`, `DEEP_RESEARCH_CONFIG_FILE` and `DEEP_RESEARCH_LOG_LEVEL` are now `SYNAPSE_DEEP_RESEARCH_DATA_DIR`, `SYNAPSE_DEEP_RESEARCH_OUTPUTS_DIR`, `SYNAPSE_DEEP_RESEARCH_CONFIG_FILE` and `SYNAPSE_DEEP_RESEARCH_LOG_LEVEL`. The old names are no longer read. The prefix is spelled out in full so it can't be mistaken for another tool called Synapse. Provider variables (`LLM_PROVIDER`, `ZAI_API_KEY`, `MODEL_*` and so on) are unchanged.
+- Saved sessions, their `--style academic` and every command-line option are unaffected.
+
+### Breaking — models are chosen per stage; route profiles are gone
+
+- **`LLM_ROUTE` and `/route` are removed**, along with the `balanced` / `budget` / `quality` presets. You now choose the model for each pipeline stage (decompose, analyze, gap_analysis, synthesize) yourself — in the new setup screen, or any time with `/model` — and the choice is saved to `~/.config/synapse-deep-research/config.json` (`SYNAPSE_DEEP_RESEARCH_CONFIG_FILE` overrides the path). Per stage the model comes from, in order: a `MODEL_<STAGE>` environment variable, what you saved, then the provider's recommendation (Z.AI: `glm-5.3-flash` for decompose/analyze, `glm-5.3` for gap_analysis/synthesize). A leftover `LLM_ROUTE` is ignored with a one-time warning. `synapse-deep-research status` and `/status` show where each stage's model comes from. The Python API changes accordingly: `RECOMMENDED_ROUTES`, `known_profiles`, `resolve_stage_route` and `Settings.llm_route` are replaced by `recommended_stage_models()` and `Settings.stage_sources()`.
+- **`/model` now saves** instead of lasting only for the session (that was the only way to keep a choice before; now it is the way to make one). It also gains an `other` entry to type any model ID, and `default` means "back to the recommendation".
+- **`/provider` saves the provider** too, so the app opens on the one you last chose (`LLM_PROVIDER` in the environment still wins).
+
+### Breaking — research papers are `auto`, `on` or `off` (was the `academic` switch)
+
+- **`/academic` is now `/papers`, and no longer an on/off toggle.** Searching research papers (arXiv + Semantic Scholar) was switched on by any of three things — the switch, the science / literature templates, and `deep` depth — and the switch could only add to that, so "off" could still mean "on". It is now a three-way setting: **`auto`** (the default) follows the template and depth, **`on`** always searches papers, **`off`** never does, even on `deep` or `science`. Bare `/papers` opens a picker whose `auto` row says what it amounts to right now (`now on (science template)`); `/papers on|off|auto` sets it directly; `/status` shows `auto — on (science template)`; the status line and banner tag is `papers`.
+- **Why the rename:** the switch was called `academic`, and so is a report style (`--style academic`, `/style academic`) — `--no-academic --style academic` read as a contradiction when the two have nothing to do with each other (one is where sources come from, the other how the report reads). The style keeps its name, because it is stored with saved sessions.
+- **`--papers` / `--no-papers`** replace `--academic`, and add the missing way to turn it off. Giving both is a usage error. Both work on `continue` and `resynthesize` too. **The old names `--academic`, `--no-academic` and `/academic` are removed, not aliased** — an alias would keep the clashing word alive. Scripts that pass `--academic` need `--papers` (or just drop it on `--depth deep`, which includes papers on `auto`); with no flag a run behaves as it did.
+
+### Added — setup screen
+
+- **A real setup screen** replaces the key-only wizard: provider → API key (hidden, OS keyring) → optional Tavily key → a model for each stage (or accept the recommended set) → optional connection check, one tiny request per model, so a wrong key or a model your plan can't use shows up immediately. Every step is a transient picker or prompt; only a summary stays on screen.
+- **It opens automatically on first launch** in a terminal when the active provider has no API key, and via `synapse-deep-research setup` / `/setup`. Esc skips it at any step. It never appears outside a terminal (pipes, scripts, `synapse-deep-research "question"` with no key still print the error and exit 1). One-shot runs and `continue` / `resynthesize` with no key open it too.
+- **Live model list.** When the provider's API can list the models the account has (Z.AI's coding endpoint can), the pickers tag registry models the account lacks and offer the others as "on your account · not verified here". Any failure falls back to the built-in list silently.
+
+### Changed — Z.AI model list and default `glm-5.3`
+
+- The registry now matches Z.AI's current lineup (checked 2026-10-25): `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx`, `glm-5.2`, `glm-5.1` are offered; `glm-5` and `glm-4.5-air` stay registered (existing configs keep validating) but are no longer listed. `glm-5.3`, `glm-5.3-flash`, `glm-5.2` and `glm-5.1` are production tier (each answered a live call, with and without thinking); `glm-5.3-flashx` stays experimental because a Coding Plan account is refused (error 1311) despite it being in the account's model list. Models carry a `listed` flag for this.
+- `GLM_MODEL` now defaults to `glm-5.3`. A `GLM_MODEL` or `MODEL_*` you have set yourself keeps winning.
+
+
+### Changed — CLI redesign
+
+- **One look everywhere.** A shared theme and console (`ui.py`) replace the five separate `Console()` instances and ad-hoc colors: the same ✓ / ✗ / ! lines, titled panels, section rules and key-value grids across one-shot runs, the REPL, the setup wizard and the pipeline's own output. Glyphs fall back to ASCII on non-UTF-8 terminals; colors follow `NO_COLOR` and disappear when piped.
+- **Discoverable options.** `synapse-deep-research --help` is now a grouped reference — usage, every research option with what each value means (`quick` = 3 sub-questions / 1 pass, …), all commands by group, and examples — instead of the bare argparse listing that omitted every subcommand. `synapse-deep-research COMMAND --help` details one command; `synapse-deep-research help [COMMAND]` and `--version` are new. Usage errors print the problem, the command's usage line, and a pointer to `--help`.
+- **Shared screens.** `history`, `inspect`, banner and run summary now render through `views.py`, so the CLI and the REPL show identical screens (the REPL's `/inspect` used to be a cut-down copy and now supports `--full` and `--source N`). History shows fork lineage and truncates to the terminal width.
+- **Run summary.** A finished run ends with a "Saved" card (session ID, report path, source/iteration count, elapsed time, next-step commands) instead of two loose lines. Follow-up questions are numbered so the "enter a number" prompt matches what is on screen. The one-shot banner carries the resolved model, search backend, run shape and the query, replacing the raw route-dict dump.
+- **REPL.** `/help` is grouped and shows each setting's allowed values; `/help <command>` explains one. A setting command with options is an interactive picker: `/depth⏎` (also `/style`, `/template`, `/provider`) opens an arrow-key list with each value's meaning and the current one marked — ↑/↓ or j/k to move, Enter to select, 1-9 to jump, Esc to cancel. Outside a terminal (pipes, scripts) the same command prints the list instead. Tab-completion now completes values after the command (`/depth ` → quick, standard, deep), the menu scrolls with the selection so all commands are reachable, aliases (`/q`, `/exit`, `/?`) stay out of the bare-`/` menu, and an empty input box shows a hint. Mistyped commands suggest the closest match. `/fresh`'s description is corrected (it revisits past URLs). Only a submitted research question leaves its input box in the scrollback (it records what was asked and under which settings); slash commands, empty Enters and quitting erase theirs, so changing settings no longer stacks up boxes.
+- **Quieter, cleaner logs.** The CLI logs warnings and errors only by default (the INFO stream was per-call route dicts and result counts interleaved with the UI); `SYNAPSE_DEEP_RESEARCH_LOG_LEVEL=INFO|DEBUG` restores them. Log lines now print through the shared console, so they appear above a live progress spinner instead of tearing it, and message text is never interpreted as markup. The eval runner keeps its existing stderr format.
+- **REPL credential check.** A query with no API key configured now stops with `✗ ZAI_API_KEY is not set` and a pointer to `/setup` and `/status`, instead of starting a run that dies with an SDK "missing credentials" error naming the wrong provider.
+- **Faster startup for non-research commands.** The LLM and search client stack is imported only when a run starts, so `--help`, `history`, `inspect`, `status` and the REPL banner no longer pay ~1.5s of import time (`synapse_deep_research.pipeline` re-exports are now lazy).
+
+### Fixed (REPL display)
+
+- **Paper search is shown when implied.** The `science` and `literature` templates and `deep` depth switch academic search on inside the pipeline, but the status line, banner and `/status` only reflected the explicit switch, so it looked like paper search was off. They now show `papers` whenever a run will use it (and `/status` names the reason).
+
+### Added
+
+- **`/model`** — change the model per pipeline stage from the REPL without editing `.env`: `/model` opens a stage picker then a model picker (the provider's current models with the recommended one tagged, `other` to type an ID, `default` to return to the recommendation); `/model analyze glm-5.1` and `/model all glm-5.3` work typed, with Tab-completion for both arguments. Saved; unregistered names are accepted with a warning, models registered only for another provider are refused, and an invalid combination rolls back.
+- **Slash commands leave nothing behind.** Setting commands are silent on success (the status line shows the new state); read-only screens (`/help`, `/status`, `/history`, `/inspect`, `/keys`, `/fork`) and any error open in a closable, scrollable viewer that disappears on Enter, Esc or `q`; `/delete <id>` confirms with a Yes/No picker instead of a typed prompt (`/delete <id> --yes` skips it). Runs and credential wizards still print normally. Outside a terminal (pipes, scripts) every command prints as before.
+- The banner's model line shows what each stage actually uses (`glm-5.3-flash · glm-5.3 for gap+synthesize`) instead of only `GLM_MODEL`, which could disagree with the stage models.
+- `synapse-deep-research status` — resolved provider and per-stage models (with where each comes from), which credentials are set, and where the session DB and reports live.
+- `synapse-deep-research history -n N` to choose how many sessions to list.
+
+### Fixed
+
+- **REPL: finished research crashed before saving.** `repl.py` called an unimported `db_save`, so every completed query or `/continue` in the REPL raised `NameError` after the report was displayed and before the session was stored.
+- **REPL: `/style` had no effect.** `ReplState.to_config()` stopped copying the style into the research config; reports always came out in the default style.
+- **Markup injection in messages.** Queries, session text, exception messages and LLM-written agent reasoning were interpolated into rich markup strings; text such as `[/foo]` could raise `MarkupError` mid-run. All user- and model-supplied text is now escaped or rendered as plain text.
+- The credentials flow in non-interactive shells no longer blocks on a confirmation prompt when a key is missing; it prints how to configure one and exits.
+
+### Breaking
+
+- **Session management moved from flags to subcommands**: `synapse-deep-research history`, `delete <ID>`, `inspect <ID> [--full] [--source N]`, `fork <ID> [query...]`, `continue <ID> [shape flags]`, `resynthesize <ID> [shape flags]`. The old `--history`, `--delete`, `--inspect`, `--full`, `--source`, `--fork-session`, `--fork-query`, `--continue-session`, and `--resynthesize` flags are rejected by argparse. `continue` and `resynthesize` accept the same shape flags as one-shot runs and run the same config gate (key check / route validation) as a research run. In-run hint messages updated to the new syntax.
+- **Thinking mode is always on** and the `--thinking` flag is removed. Every registered model either supports the thinking payload (GLM via `zai-extra-body`), reasons natively with the payload omitted (Kimi, DeepSeek, MiMo, Qwen on OpenCode Go, which is switched off for now — dialect `none`), or is auto-gated off (`glm-4.5-air`). (The REPL `/thinking` command was removed along with the flag.)
+
+### Added
+
+- **Interactive REPL UI** (prompt_toolkit): a Claude-Code-style rounded input box whose top border carries a colored, minimal run state (depth, template, non-default style, active toggles, provider/route — defaults are silent); typing `/` opens a fuzzy completion menu *below* the box with each command's usage and description, and plain queries never trigger it; persistent history with ↑/↓ and Ctrl-R; first Ctrl-C clears the input line. Non-tty stdin (pipes, scripts, tests) automatically falls back to the plain prompt. The `/thinking` command is gone along with the flag — thinking is always on.
+
 ## v0.4.0 — 2026-10-24
 
 ### Added

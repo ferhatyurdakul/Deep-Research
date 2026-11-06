@@ -1,5 +1,5 @@
 """
-End-to-end tests for the Deep Research pipeline.
+End-to-end tests for the Synapse Deep Research pipeline.
 
 These tests hit live APIs (Z.AI GLM, Tavily, arXiv, Semantic Scholar)
 and verify the full research pipeline works correctly.
@@ -20,8 +20,8 @@ import pytest
 # Ensure src is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from deep_research.config import settings
-from deep_research.models import ReportStyle, ResearchConfig, ResearchDepth
+from synapse_deep_research.config import settings
+from synapse_deep_research.models import ReportStyle, ResearchConfig, ResearchDepth
 
 
 # --- Guards ---
@@ -41,19 +41,19 @@ skip_no_keys = pytest.mark.skipif(
 @skip_no_keys
 class TestLLM:
     def test_sync_chat(self):
-        from deep_research.llm import chat
+        from synapse_deep_research.llm import chat
         result = chat("Say 'hello' and nothing else.", temperature=0.0)
         assert "hello" in result.lower()
 
     @pytest.mark.asyncio
     async def test_async_chat(self):
-        from deep_research.llm import achat
+        from synapse_deep_research.llm import achat
         result = await achat("Say 'hello' and nothing else.", temperature=0.0)
         assert "hello" in result.lower()
 
     @pytest.mark.asyncio
     async def test_async_chat_json(self):
-        from deep_research.llm import achat_json
+        from synapse_deep_research.llm import achat_json
         result = await achat_json('Return this exact JSON: {"status": "ok"}')
         assert result["status"] == "ok"
 
@@ -62,7 +62,7 @@ class TestLLM:
 class TestSearch:
     @pytest.mark.asyncio
     async def test_tavily_search(self):
-        from deep_research.search.web_search import TavilySearchProvider
+        from synapse_deep_research.search.web_search import TavilySearchProvider
         provider = TavilySearchProvider(settings.tavily_api_key)
         results = await provider.search("Python programming language", max_results=3)
         assert len(results) > 0
@@ -71,7 +71,7 @@ class TestSearch:
 
     @pytest.mark.asyncio
     async def test_duckduckgo_search(self):
-        from deep_research.search.web_search import DuckDuckGoSearchProvider
+        from synapse_deep_research.search.web_search import DuckDuckGoSearchProvider
         provider = DuckDuckGoSearchProvider()
         results = await provider.search("Python programming language", max_results=3)
         # DDG may fail on older Python/SSL (LibreSSL < 3.x doesn't support TLS 1.3)
@@ -84,7 +84,7 @@ class TestSearch:
 class TestAcademicSearch:
     @pytest.mark.asyncio
     async def test_arxiv(self):
-        from deep_research.search.arxiv_search import ArxivSearchProvider
+        from synapse_deep_research.search.arxiv_search import ArxivSearchProvider
         provider = ArxivSearchProvider()
         results = await provider.search("transformer neural network", max_results=3)
         assert len(results) > 0
@@ -92,14 +92,14 @@ class TestAcademicSearch:
 
     @pytest.mark.asyncio
     async def test_semantic_scholar(self):
-        from deep_research.search.semantic_scholar import SemanticScholarProvider
+        from synapse_deep_research.search.semantic_scholar import SemanticScholarProvider
         provider = SemanticScholarProvider()
         results = await provider.search("transformer neural network", max_results=3)
         assert isinstance(results, list)
 
     @pytest.mark.asyncio
     async def test_aggregator(self):
-        from deep_research.search.aggregator import SearchAggregator
+        from synapse_deep_research.search.aggregator import SearchAggregator
         agg = SearchAggregator(tavily_api_key="", semantic_scholar_api_key="")
         # Should have ddg as web fallback + arxiv + scholar
         assert "web" in agg.available_sources
@@ -108,8 +108,8 @@ class TestAcademicSearch:
 
     @pytest.mark.asyncio
     async def test_aggregator_dedup(self):
-        from deep_research.search.aggregator import deduplicate_results
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import deduplicate_results
+        from synapse_deep_research.models import SearchResult, SourceType
         results = [
             SearchResult(title="Paper A", url="https://arxiv.org/abs/1234", snippet="", source_type=SourceType.ARXIV),
             SearchResult(title="Paper A", url="https://arxiv.org/abs/1234/", snippet="", source_type=SourceType.WEB),
@@ -124,8 +124,8 @@ class TestDeduplicationAndScoring:
 
     def test_dedup_by_arxiv_id(self):
         """arXiv and Semantic Scholar returning same paper should dedup."""
-        from deep_research.search.aggregator import deduplicate_results
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import deduplicate_results
+        from synapse_deep_research.models import SearchResult, SourceType
         results = [
             SearchResult(
                 title="Attention Is All You Need",
@@ -148,8 +148,8 @@ class TestDeduplicationAndScoring:
         assert deduped[0].source_type == SourceType.ARXIV
 
     def test_dedup_by_doi(self):
-        from deep_research.search.aggregator import deduplicate_results
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import deduplicate_results
+        from synapse_deep_research.models import SearchResult, SourceType
         results = [
             SearchResult(
                 title="Some Journal Paper",
@@ -168,8 +168,8 @@ class TestDeduplicationAndScoring:
         assert len(deduped) == 1
 
     def test_dedup_preserves_unique(self):
-        from deep_research.search.aggregator import deduplicate_results
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import deduplicate_results
+        from synapse_deep_research.models import SearchResult, SourceType
         results = [
             SearchResult(title="Paper A", url="https://a.com", snippet="", source_type=SourceType.WEB),
             SearchResult(title="Paper B", url="https://b.com", snippet="", source_type=SourceType.WEB),
@@ -179,15 +179,15 @@ class TestDeduplicationAndScoring:
         assert len(deduped) == 3
 
     def test_composite_score_academic_bonus(self):
-        from deep_research.search.aggregator import compute_source_score
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import compute_source_score
+        from synapse_deep_research.models import SearchResult, SourceType
         web = SearchResult(title="Blog", url="https://blog.com/x", snippet="...", source_type=SourceType.WEB)
         arxiv = SearchResult(title="Paper", url="https://arxiv.org/abs/1234", snippet="...", source_type=SourceType.ARXIV)
         assert compute_source_score(arxiv) > compute_source_score(web)
 
     def test_composite_score_citation_count(self):
-        from deep_research.search.aggregator import compute_source_score
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import compute_source_score
+        from synapse_deep_research.models import SearchResult, SourceType
         low = SearchResult(title="Paper", url="https://arxiv.org/abs/1", snippet="...",
                            source_type=SourceType.SEMANTIC_SCHOLAR, extra={"citation_count": 2})
         high = SearchResult(title="Paper", url="https://arxiv.org/abs/2", snippet="...",
@@ -195,8 +195,8 @@ class TestDeduplicationAndScoring:
         assert compute_source_score(high) > compute_source_score(low)
 
     def test_composite_score_recency(self):
-        from deep_research.search.aggregator import compute_source_score
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.search.aggregator import compute_source_score
+        from synapse_deep_research.models import SearchResult, SourceType
         old = SearchResult(title="Old", url="https://a.com", snippet="...",
                            source_type=SourceType.WEB, published_date="2015-01-01")
         new = SearchResult(title="New", url="https://b.com", snippet="...",
@@ -204,19 +204,19 @@ class TestDeduplicationAndScoring:
         assert compute_source_score(new) > compute_source_score(old)
 
     def test_domain_reliability_high(self):
-        from deep_research.search.aggregator import domain_reliability_score
+        from synapse_deep_research.search.aggregator import domain_reliability_score
         assert domain_reliability_score("https://nature.com/articles/123") == 1.0
         assert domain_reliability_score("https://pubmed.ncbi.nlm.nih.gov/12345") == 1.0
         assert domain_reliability_score("https://arxiv.org/abs/1234") == 1.0
         assert domain_reliability_score("https://www.stanford.edu/paper") == 1.0
 
     def test_domain_reliability_low(self):
-        from deep_research.search.aggregator import domain_reliability_score
+        from synapse_deep_research.search.aggregator import domain_reliability_score
         assert domain_reliability_score("https://www.pinterest.com/pin/123") == 0.2
         assert domain_reliability_score("https://quora.com/question/what") == 0.2
 
     def test_domain_reliability_neutral(self):
-        from deep_research.search.aggregator import domain_reliability_score
+        from synapse_deep_research.search.aggregator import domain_reliability_score
         score = domain_reliability_score("https://randomsite.com/page")
         assert score == 0.5
 
@@ -224,7 +224,7 @@ class TestDeduplicationAndScoring:
 class TestExtraction:
     @pytest.mark.asyncio
     async def test_html_scrape(self):
-        from deep_research.extraction.parser import ContentParser
+        from synapse_deep_research.extraction.parser import ContentParser
         async with ContentParser() as parser:
             result = await parser.parse_url("https://example.com")
         assert result is not None
@@ -233,7 +233,7 @@ class TestExtraction:
 
     @pytest.mark.asyncio
     async def test_pdf_scrape_arxiv(self):
-        from deep_research.extraction.parser import ContentParser
+        from synapse_deep_research.extraction.parser import ContentParser
         async with ContentParser() as parser:
             result = await parser.parse_url("https://arxiv.org/abs/1706.03762")
         assert result is not None
@@ -243,8 +243,8 @@ class TestExtraction:
     @pytest.mark.asyncio
     async def test_arxiv_abstract_shortcut(self):
         """arXiv papers should use abstract directly without fetching."""
-        from deep_research.extraction.parser import ContentParser
-        from deep_research.models import SearchResult, SourceType
+        from synapse_deep_research.extraction.parser import ContentParser
+        from synapse_deep_research.models import SearchResult, SourceType
         sr = SearchResult(
             title="Test Paper", url="https://arxiv.org/abs/2301.00001",
             snippet="This is the abstract of the paper about transformers.",
@@ -259,8 +259,8 @@ class TestExtraction:
 
 class TestReportStyles:
     def test_methodology_builder(self):
-        from deep_research.pipeline.synthesizer import _build_search_methodology
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.pipeline.synthesizer import _build_search_methodology
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         sources = [
             SourceAnalysis(url="https://a.com", title="A", key_findings=["f"], source_type=SourceType.WEB),
@@ -276,7 +276,7 @@ class TestReportStyles:
         assert "1 from snippets" in result
 
     def test_style_prompt_brief(self):
-        from deep_research.pipeline.synthesizer import _get_style_prompt
+        from synapse_deep_research.pipeline.synthesizer import _get_style_prompt
         structure, system = _get_style_prompt(
             ReportStyle.BRIEF, [], 1, 3, query="quantum computing", date="2026-06-07",
         )
@@ -287,8 +287,8 @@ class TestReportStyles:
         assert "quantum computing" in structure
 
     def test_style_prompt_academic(self):
-        from deep_research.pipeline.synthesizer import _get_style_prompt
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.pipeline.synthesizer import _get_style_prompt
+        from synapse_deep_research.models import SourceAnalysis, SourceType
         sources = [SourceAnalysis(url="https://a.com", title="A", key_findings=["f"], source_type=SourceType.WEB)]
         structure, system = _get_style_prompt(
             ReportStyle.ACADEMIC, sources, 1, 3, query="quantum computing", date="2026-06-07",
@@ -302,7 +302,7 @@ class TestReportStyles:
         assert "2026-06-07" in structure
 
     def test_style_prompt_standard(self):
-        from deep_research.pipeline.synthesizer import _get_style_prompt
+        from synapse_deep_research.pipeline.synthesizer import _get_style_prompt
         structure, system = _get_style_prompt(
             ReportStyle.STANDARD, [], 1, 3, query="quantum computing", date="2026-06-07",
         )
@@ -313,7 +313,7 @@ class TestReportStyles:
         assert "{{source_count}}" not in structure
 
     def test_fill_structure_resolves_all_tokens(self):
-        from deep_research.pipeline.synthesizer import _fill_structure
+        from synapse_deep_research.pipeline.synthesizer import _fill_structure
         template = 'Title: "# {{query}}"\nMeta: {{date}} | sources {{source_count}}'
         out = _fill_structure(template, query="AI safety", date="2026-06-07", source_count=12)
         assert "{{" not in out and "}}" not in out
@@ -324,8 +324,8 @@ class TestReportStyles:
 
 class TestEvidenceExtraction:
     def test_format_analyses_shows_evidenced_findings(self):
-        from deep_research.pipeline.analyzer import format_analyses
-        from deep_research.models import (
+        from synapse_deep_research.pipeline.analyzer import format_analyses
+        from synapse_deep_research.models import (
             ContentDepth,
             EvidencedFinding,
             SourceAnalysis,
@@ -361,8 +361,8 @@ class TestEvidenceExtraction:
         assert "abstract" in out
 
     def test_format_analyses_snippet_depth_label(self):
-        from deep_research.pipeline.analyzer import format_analyses
-        from deep_research.models import ContentDepth, SourceAnalysis, SourceType
+        from synapse_deep_research.pipeline.analyzer import format_analyses
+        from synapse_deep_research.models import ContentDepth, SourceAnalysis, SourceType
 
         sa = SourceAnalysis(
             url="https://example.com",
@@ -376,8 +376,8 @@ class TestEvidenceExtraction:
 
     def test_format_analyses_falls_back_to_flat_lists(self):
         """Old-format SourceAnalysis (no evidenced_findings) should still render."""
-        from deep_research.pipeline.analyzer import format_analyses
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.pipeline.analyzer import format_analyses
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         sa = SourceAnalysis(
             url="https://example.com",
@@ -392,7 +392,7 @@ class TestEvidenceExtraction:
 
     def test_analyze_prompt_requests_evidenced_findings(self):
         """The ANALYZE_PROMPT must ask the LLM for evidenced_findings schema."""
-        from deep_research.pipeline.analyzer import ANALYZE_PROMPT
+        from synapse_deep_research.pipeline.analyzer import ANALYZE_PROMPT
         assert "evidenced_findings" in ANALYZE_PROMPT
         assert "verbatim" in ANALYZE_PROMPT.lower()
         assert "confidence" in ANALYZE_PROMPT
@@ -400,14 +400,14 @@ class TestEvidenceExtraction:
 
 class TestTemplates:
     def test_list_templates(self):
-        from deep_research.pipeline.templates import list_templates
+        from synapse_deep_research.pipeline.templates import list_templates
         templates = list_templates()
         assert len(templates) == 4
         keys = {t["key"] for t in templates}
         assert keys == {"technology", "science", "market", "literature"}
 
     def test_get_template(self):
-        from deep_research.pipeline.templates import get_template
+        from synapse_deep_research.pipeline.templates import get_template
         t = get_template("science")
         assert t is not None
         assert t.use_academic is True
@@ -419,7 +419,7 @@ class TestModels:
         quick = ResearchConfig.from_depth(ResearchDepth.QUICK)
         assert quick.max_sub_questions == 3
         assert quick.max_iterations == 1
-        assert quick.use_thinking is False
+        assert quick.use_thinking is True  # thinking is on at every depth
 
         deep = ResearchConfig.from_depth(ResearchDepth.DEEP)
         assert deep.max_sub_questions == 7
@@ -458,7 +458,7 @@ class TestDecomposerFallback:
 
     @pytest.mark.asyncio
     async def test_empty_decomposition_falls_back_to_query(self, monkeypatch):
-        import deep_research.pipeline.decomposer as dec
+        import synapse_deep_research.pipeline.decomposer as dec
 
         async def _fake(*args, **kwargs):
             return {"sub_questions": []}  # model returned nothing usable
@@ -470,7 +470,7 @@ class TestDecomposerFallback:
 
     @pytest.mark.asyncio
     async def test_non_dict_payload_falls_back_to_query(self, monkeypatch):
-        import deep_research.pipeline.decomposer as dec
+        import synapse_deep_research.pipeline.decomposer as dec
 
         async def _fake(*args, **kwargs):
             return ["not", "a", "dict"]  # wrong shape entirely
@@ -482,7 +482,7 @@ class TestDecomposerFallback:
 
     @pytest.mark.asyncio
     async def test_valid_decomposition_is_unchanged(self, monkeypatch):
-        import deep_research.pipeline.decomposer as dec
+        import synapse_deep_research.pipeline.decomposer as dec
 
         async def _fake(*args, **kwargs):
             return {"sub_questions": [
@@ -500,14 +500,14 @@ class TestAgentIterationBudget:
     """The agent loop budget is decoupled from the fixed-pipeline max_iterations."""
 
     def test_budget_scales_with_depth(self):
-        from deep_research.pipeline.agent import agent_iteration_budget
+        from synapse_deep_research.pipeline.agent import agent_iteration_budget
 
         assert agent_iteration_budget(ResearchDepth.QUICK) == 3
         assert agent_iteration_budget(ResearchDepth.STANDARD) == 5
         assert agent_iteration_budget(ResearchDepth.DEEP) == 8
 
     def test_budget_never_exceeds_hard_limit(self):
-        from deep_research.pipeline.agent import (
+        from synapse_deep_research.pipeline.agent import (
             MAX_AGENT_ITERATIONS,
             agent_iteration_budget,
         )
@@ -516,7 +516,7 @@ class TestAgentIterationBudget:
             assert agent_iteration_budget(depth) <= MAX_AGENT_ITERATIONS
 
     def test_every_depth_runs_at_least_one_decision_cycle(self):
-        from deep_research.pipeline.agent import agent_iteration_budget
+        from synapse_deep_research.pipeline.agent import agent_iteration_budget
 
         # The decision loop is range(2, budget + 1); budget >= 2 guarantees
         # at least one cycle even at quick depth (previously zero).
@@ -526,7 +526,7 @@ class TestAgentIterationBudget:
             assert len(range(2, budget + 1)) >= 1
 
     def test_decoupled_from_fixed_max_iterations(self):
-        from deep_research.pipeline.agent import agent_iteration_budget
+        from synapse_deep_research.pipeline.agent import agent_iteration_budget
 
         # deep's fixed pipeline runs 3 iterations, but the agent gets 8.
         deep = ResearchConfig.from_depth(ResearchDepth.DEEP)
@@ -540,14 +540,14 @@ class TestAgentIterationBudget:
 class TestResearchPipeline:
     @pytest.mark.asyncio
     async def test_decompose(self):
-        from deep_research.pipeline.decomposer import adecompose_query
+        from synapse_deep_research.pipeline.decomposer import adecompose_query
         subs = await adecompose_query("What is quantum computing?", max_q=3)
         assert len(subs) == 3
         assert all(sq.question for sq in subs)
 
     @pytest.mark.asyncio
     async def test_analyze_source(self):
-        from deep_research.pipeline.analyzer import aanalyze_source
+        from synapse_deep_research.pipeline.analyzer import aanalyze_source
         sa = await aanalyze_source(
             query="What is Python?",
             url="https://example.com",
@@ -561,7 +561,7 @@ class TestResearchPipeline:
     @pytest.mark.asyncio
     async def test_quick_research(self):
         """Full pipeline test at quick depth — fast, 1 iteration."""
-        from deep_research.pipeline.orchestrator import arun_research
+        from synapse_deep_research.pipeline.orchestrator import arun_research
         config = ResearchConfig.from_depth(ResearchDepth.QUICK)
         report = await arun_research("What is the Python GIL?", config)
 
@@ -578,13 +578,13 @@ class TestResearchPipeline:
 class TestDatabase:
     def test_save_and_load(self, tmp_path, monkeypatch):
         test_db = tmp_path / "test.db"
-        import deep_research.config as cfg
-        import deep_research.storage.db as db_mod
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.storage.db as db_mod
         monkeypatch.setattr(cfg, "DB_PATH", test_db)
         monkeypatch.setattr(db_mod, "DB_PATH", test_db)
 
-        from deep_research.storage.db import init_db, save_report, load_report, list_sessions, delete_session
-        from deep_research.models import ResearchReport, SubQuestion, SourceAnalysis
+        from synapse_deep_research.storage.db import init_db, save_report, load_report, list_sessions, delete_session
+        from synapse_deep_research.models import ResearchReport, SubQuestion, SourceAnalysis
 
         init_db()
 
@@ -614,13 +614,13 @@ class TestDatabase:
 
     def test_known_urls_are_normalized(self, tmp_path, monkeypatch):
         test_db = tmp_path / "norm.db"
-        import deep_research.config as cfg
-        import deep_research.storage.db as db_mod
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.storage.db as db_mod
         monkeypatch.setattr(cfg, "DB_PATH", test_db)
         monkeypatch.setattr(db_mod, "DB_PATH", test_db)
 
-        from deep_research.storage.db import init_db, save_report, get_known_urls
-        from deep_research.models import ResearchReport, SourceAnalysis
+        from synapse_deep_research.storage.db import init_db, save_report, get_known_urls
+        from synapse_deep_research.models import ResearchReport, SourceAnalysis
 
         init_db()
         save_report(ResearchReport(query="q", sources=[
@@ -636,19 +636,19 @@ class TestDatabase:
 class TestSessionForking:
     def _fresh_db(self, tmp_path, monkeypatch):
         test_db = tmp_path / "fork.db"
-        import deep_research.config as cfg
-        import deep_research.storage.db as db_mod
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.storage.db as db_mod
         monkeypatch.setattr(cfg, "DB_PATH", test_db)
         monkeypatch.setattr(db_mod, "DB_PATH", test_db)
-        from deep_research.storage.db import init_db
+        from synapse_deep_research.storage.db import init_db
         init_db()
 
     def test_fork_session_copies_all_artifacts(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import (
+        from synapse_deep_research.storage.db import (
             fork_session, load_report, save_report,
         )
-        from deep_research.models import (
+        from synapse_deep_research.models import (
             ResearchIteration,
             ResearchReport,
             SourceAnalysis,
@@ -690,10 +690,10 @@ class TestSessionForking:
 
     def test_fork_preserves_original(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import (
+        from synapse_deep_research.storage.db import (
             fork_session, load_report, save_report,
         )
-        from deep_research.models import ResearchReport, SourceAnalysis
+        from synapse_deep_research.models import ResearchReport, SourceAnalysis
 
         original = ResearchReport(
             query="Keep me",
@@ -711,10 +711,10 @@ class TestSessionForking:
 
     def test_fork_with_new_query(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import (
+        from synapse_deep_research.storage.db import (
             fork_session, load_report, save_report,
         )
-        from deep_research.models import ResearchReport, SourceAnalysis
+        from synapse_deep_research.models import ResearchReport, SourceAnalysis
 
         original = ResearchReport(
             query="Original",
@@ -733,15 +733,15 @@ class TestSessionForking:
 
     def test_fork_missing_session_returns_none(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import fork_session
+        from synapse_deep_research.storage.db import fork_session
         assert fork_session(9999) is None
 
     def test_list_sessions_includes_parent(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import (
+        from synapse_deep_research.storage.db import (
             fork_session, list_sessions, save_report,
         )
-        from deep_research.models import ResearchReport
+        from synapse_deep_research.models import ResearchReport
 
         orig_id = save_report(ResearchReport(query="Q"), depth="quick")
         fork_id = fork_session(orig_id)
@@ -752,8 +752,8 @@ class TestSessionForking:
 
     def test_fork_of_fork_records_immediate_parent(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import fork_session, load_report, save_report
-        from deep_research.models import ResearchReport
+        from synapse_deep_research.storage.db import fork_session, load_report, save_report
+        from synapse_deep_research.models import ResearchReport
 
         orig_id = save_report(ResearchReport(query="root"), depth="standard")
         fork1_id = fork_session(orig_id)
@@ -767,8 +767,8 @@ class TestSessionForking:
 
     def test_fork_preserves_depth(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import fork_session, list_sessions, save_report
-        from deep_research.models import ResearchReport
+        from synapse_deep_research.storage.db import fork_session, list_sessions, save_report
+        from synapse_deep_research.models import ResearchReport
 
         orig_id = save_report(ResearchReport(query="d"), depth="deep")
         fork_id = fork_session(orig_id)
@@ -779,10 +779,10 @@ class TestSessionForking:
 
     def test_delete_parent_clears_children_lineage(self, tmp_path, monkeypatch):
         self._fresh_db(tmp_path, monkeypatch)
-        from deep_research.storage.db import (
+        from synapse_deep_research.storage.db import (
             delete_session, fork_session, load_report, save_report,
         )
-        from deep_research.models import ResearchReport
+        from synapse_deep_research.models import ResearchReport
 
         orig_id = save_report(ResearchReport(query="q"), depth="standard")
         fork_id = fork_session(orig_id)
@@ -793,23 +793,47 @@ class TestSessionForking:
         assert child is not None
         assert child.parent_session_id is None  # cleared, not dangling
 
-    def test_fork_query_without_fork_session_errors(self):
+    def test_old_session_flags_are_gone(self):
+        """Breaking change: session management moved to subcommands, so the
+        legacy flags must be rejected by argparse."""
         import subprocess
 
+        for legacy in ("--history", "--inspect 3", "--delete 3", "--fork-session 3"):
+            result = subprocess.run(
+                [sys.executable, "-m", "synapse_deep_research.main", *legacy.split()],
+                capture_output=True, text=True, timeout=60,
+            )
+            assert result.returncode == 2, legacy  # argparse: unrecognized
+
+    def test_history_subcommand_empty_db(self, tmp_path):
+        import subprocess
+
+        env = {**os.environ, "XDG_DATA_HOME": str(tmp_path)}
         result = subprocess.run(
-            [sys.executable, "-m", "deep_research.main", "--fork-query", "x"],
-            capture_output=True, text=True, timeout=60,
+            [sys.executable, "-m", "synapse_deep_research.main", "history"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+        assert result.returncode == 0
+        assert "No research sessions found" in result.stdout
+
+    def test_fork_subcommand_missing_session(self, tmp_path):
+        import subprocess
+
+        env = {**os.environ, "XDG_DATA_HOME": str(tmp_path)}
+        result = subprocess.run(
+            [sys.executable, "-m", "synapse_deep_research.main", "fork", "999", "new query"],
+            capture_output=True, text=True, timeout=60, env=env,
         )
         assert result.returncode == 1
-        assert "--fork-query requires --fork-session" in (result.stdout + result.stderr)
+        assert "not found" in result.stdout
 
 
 # --- Report formatting ---
 
 class TestReport:
     def test_format_markdown(self):
-        from deep_research.output.report import format_report_markdown
-        from deep_research.models import ResearchReport, SubQuestion, SourceAnalysis
+        from synapse_deep_research.output.report import format_report_markdown
+        from synapse_deep_research.models import ResearchReport, SubQuestion, SourceAnalysis
 
         report = ResearchReport(
             query="Test query",
@@ -827,8 +851,8 @@ class TestReport:
 
     def test_no_duplicate_references(self):
         """When detailed_findings already has a References section, don't add another."""
-        from deep_research.output.report import format_report_markdown
-        from deep_research.models import ResearchReport, SourceAnalysis
+        from synapse_deep_research.output.report import format_report_markdown
+        from synapse_deep_research.models import ResearchReport, SourceAnalysis
 
         report = ResearchReport(
             query="Test",
@@ -846,8 +870,8 @@ class TestReport:
 
 class TestCitations:
     def test_format_web_citation(self):
-        from deep_research.output.citations import format_citation
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.output.citations import format_citation
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         source = SourceAnalysis(
             url="https://example.com/article",
@@ -862,8 +886,8 @@ class TestCitations:
         assert "retrieved" in citation
 
     def test_format_arxiv_citation(self):
-        from deep_research.output.citations import format_citation
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.output.citations import format_citation
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         source = SourceAnalysis(
             url="https://arxiv.org/abs/1706.03762",
@@ -880,8 +904,8 @@ class TestCitations:
         assert "(2017)" in citation
 
     def test_format_scholar_citation(self):
-        from deep_research.output.citations import format_citation
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.output.citations import format_citation
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         source = SourceAnalysis(
             url="https://arxiv.org/abs/2301.00001",
@@ -898,8 +922,8 @@ class TestCitations:
         assert "DOI: 10.1234/test" in citation
 
     def test_replace_references_in_report(self):
-        from deep_research.output.citations import replace_references_in_report
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.output.citations import replace_references_in_report
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         md = "# Report\n\nSome text [1].\n\n## References\n\n[1] Fake reference"
         sources = [SourceAnalysis(
@@ -912,8 +936,8 @@ class TestCitations:
         assert "## References" in result
 
     def test_build_references_section(self):
-        from deep_research.output.citations import build_references_section
-        from deep_research.models import SourceAnalysis, SourceType
+        from synapse_deep_research.output.citations import build_references_section
+        from synapse_deep_research.models import SourceAnalysis, SourceType
 
         sources = [
             SourceAnalysis(url="https://a.com", title="A", key_findings=["f"], source_type=SourceType.WEB),
@@ -926,7 +950,7 @@ class TestCitations:
         assert "## References" in refs
 
     def test_validate_citations_valid(self):
-        from deep_research.output.citations import validate_citations
+        from synapse_deep_research.output.citations import validate_citations
         md = "Some claim [1]. Another claim [2, 3].\n\n## References\n[1] ..."
         result = validate_citations(md, 3)
         assert result["valid"] == [1, 2, 3]
@@ -934,7 +958,7 @@ class TestCitations:
         assert result["unused_sources"] == []
 
     def test_validate_citations_invalid(self):
-        from deep_research.output.citations import validate_citations
+        from synapse_deep_research.output.citations import validate_citations
         md = "A claim [1]. Bad ref [5]. Also bad [0].\n\n## References\n"
         result = validate_citations(md, 3)
         assert 1 in result["valid"]
@@ -944,7 +968,7 @@ class TestCitations:
         assert 3 in result["unused_sources"]
 
     def test_clean_invalid_citations(self):
-        from deep_research.output.citations import clean_invalid_citations
+        from synapse_deep_research.output.citations import clean_invalid_citations
         md = "Claim [1]. Bad [5]. Mixed [1, 5, 2].\n\n## References\n[1] Source"
         result = clean_invalid_citations(md, 3)
         assert "[5]" not in result.split("## References")[0]
@@ -954,7 +978,7 @@ class TestCitations:
         assert "[1] Source" in result
 
     def test_validate_uncited_paragraphs(self):
-        from deep_research.output.citations import validate_citations
+        from synapse_deep_research.output.citations import validate_citations
         md = (
             "This is a well-cited paragraph with evidence from the source material [1].\n\n"
             "This paragraph has no citation and is long enough to be substantive and should be flagged by the validator.\n\n"
@@ -964,7 +988,7 @@ class TestCitations:
         assert result["uncited_paragraphs"] >= 1
 
     def test_find_all_citations(self):
-        from deep_research.output.citations import find_all_citations
+        from synapse_deep_research.output.citations import find_all_citations
         nums = find_all_citations("Text [1] more [2, 3] end [1].")
         assert sorted(set(nums)) == [1, 2, 3]
 
@@ -974,13 +998,13 @@ class TestCitations:
 class TestDatabaseEnriched:
     def test_save_and_load_with_metadata(self, tmp_path, monkeypatch):
         test_db = tmp_path / "test_enriched.db"
-        import deep_research.config as cfg
-        import deep_research.storage.db as db_mod
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.storage.db as db_mod
         monkeypatch.setattr(cfg, "DB_PATH", test_db)
         monkeypatch.setattr(db_mod, "DB_PATH", test_db)
 
-        from deep_research.storage.db import init_db, save_report, load_report
-        from deep_research.models import (
+        from synapse_deep_research.storage.db import init_db, save_report, load_report
+        from synapse_deep_research.models import (
             ContentDepth,
             EvidencedFinding,
             ResearchReport,
@@ -1035,13 +1059,13 @@ class TestDatabaseEnriched:
 
     def test_extracted_data_round_trips(self, tmp_path, monkeypatch):
         test_db = tmp_path / "test_extracted.db"
-        import deep_research.config as cfg
-        import deep_research.storage.db as db_mod
+        import synapse_deep_research.config as cfg
+        import synapse_deep_research.storage.db as db_mod
         monkeypatch.setattr(cfg, "DB_PATH", test_db)
         monkeypatch.setattr(db_mod, "DB_PATH", test_db)
 
-        from deep_research.storage.db import init_db, save_report, load_report
-        from deep_research.models import (
+        from synapse_deep_research.storage.db import init_db, save_report, load_report
+        from synapse_deep_research.models import (
             ExtractedData, ResearchReport, SourceAnalysis,
         )
 
@@ -1067,8 +1091,43 @@ class TestDatabaseEnriched:
 # --- Synthesizer report splitting ---
 
 class TestReportSplit:
+    def test_split_skips_a_rule_after_the_metadata_line(self):
+        """Regression: glm-5.3 puts a '---' rule between the metadata line and
+        the first section. _split_report stopped stripping at the rule, found
+        text not starting with '## ', and returned an empty executive summary
+        with the whole report as 'detailed findings'."""
+        from synapse_deep_research.pipeline.synthesizer import _split_report
+
+        text = (
+            "# Research Report: X\n\n"
+            "**Date:** 2026-10-25 | **Sources analyzed:** 7\n\n"
+            "---\n\n"
+            "## Executive Summary\nS [1].\n\n---\n\n"
+            "## Key Findings\n- p [2]\n"
+        )
+        executive, detailed = _split_report(text)
+        assert executive.startswith("## Executive Summary") and "S [1]." in executive
+        assert detailed.startswith("## Key Findings")
+
+    def test_split_skips_any_horizontal_rule_style(self):
+        from synapse_deep_research.pipeline.synthesizer import _split_report
+
+        for rule in ("---", "-----", "***", "___"):
+            executive, detailed = _split_report(
+                f"# T\n\n{rule}\n\n## Summary\nbody\n\n## Findings\nmore\n"
+            )
+            assert executive.startswith("## Summary"), rule
+            assert detailed.startswith("## Findings"), rule
+
+    def test_split_does_not_eat_a_rule_that_is_not_leading(self):
+        from synapse_deep_research.pipeline.synthesizer import _split_report
+
+        executive, detailed = _split_report("## Summary\nbody\n\n---\n\n## Findings\nmore\n")
+        assert executive.startswith("## Summary") and "body" in executive
+        assert detailed.startswith("## Findings")
+
     def test_split_drops_title_and_metadata(self):
-        from deep_research.pipeline.synthesizer import _split_report
+        from synapse_deep_research.pipeline.synthesizer import _split_report
         text = (
             "# Research Report: What is X\n"
             "**Date:** 2026-06-08 | **Sources analyzed:** 5\n\n"
@@ -1087,7 +1146,7 @@ class TestReportSplit:
         assert "Executive Summary" not in detailed
 
     def test_split_handles_missing_structure(self):
-        from deep_research.pipeline.synthesizer import _split_report
+        from synapse_deep_research.pipeline.synthesizer import _split_report
         executive, detailed = _split_report("Just a blob of prose with no headings.")
         assert executive == ""
         assert "blob of prose" in detailed
@@ -1098,7 +1157,7 @@ class TestReportSplit:
 class TestGapParsing:
     @pytest.mark.asyncio
     async def test_malformed_gaps_are_skipped_not_raised(self, monkeypatch):
-        import deep_research.pipeline.analyzer as analyzer
+        import synapse_deep_research.pipeline.analyzer as analyzer
 
         async def fake_achat_json(*args, **kwargs):
             return {
